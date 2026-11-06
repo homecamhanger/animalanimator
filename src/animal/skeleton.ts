@@ -33,6 +33,9 @@ export interface FieldBall {
   pos: THREE.Vector3;
   radius: number;
   color: BallColor;
+  /** Arc-length-ish coordinate along the animal (0 = rump → ~1 = face, >1 limbs/tail).
+   *  The stripe shader bands on this instead of world axes. */
+  flow: number;
 }
 
 export interface SkeletonAnchors {
@@ -130,17 +133,17 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   for (const { row, z, ry, rowRadius, offset } of rowData) {
     const y = groundY(ry);
     if (row.offsetFrac === 0) {
-      bones.push({ name: 'spine_rump', pos: new THREE.Vector3(0, y, z), radius: rowRadius, color: 'fur' });
+      bones.push({ name: 'spine_rump', pos: new THREE.Vector3(0, y, z), radius: rowRadius, color: 'fur', flow: 0 });
       continue;
     }
-    bones.push({ name: `spine_${row.t.toFixed(2)}_l`, pos: new THREE.Vector3(-offset, y, z), radius: rowRadius, color: 'fur' });
-    bones.push({ name: `spine_${row.t.toFixed(2)}_r`, pos: new THREE.Vector3(offset, y, z), radius: rowRadius, color: 'fur' });
+    bones.push({ name: `spine_${row.t.toFixed(2)}_l`, pos: new THREE.Vector3(-offset, y, z), radius: rowRadius, color: 'fur', flow: row.t });
+    bones.push({ name: `spine_${row.t.toFixed(2)}_r`, pos: new THREE.Vector3(offset, y, z), radius: rowRadius, color: 'fur', flow: row.t });
     // Centre bridge ball — kills the double-sphere crease along the spine.
-    bones.push({ name: `spine_${row.t.toFixed(2)}_c`, pos: new THREE.Vector3(0, y, z), radius: rowRadius * 0.82, color: 'fur' });
+    bones.push({ name: `spine_${row.t.toFixed(2)}_c`, pos: new THREE.Vector3(0, y, z), radius: rowRadius * 0.82, color: 'fur', flow: row.t });
   }
   // Sagging belly core (the chonk engine) + cream belly lighten.
-  bones.push({ name: 'belly_sag', pos: new THREE.Vector3(0, groundY(sagBallY), midRow.z), radius: sagBallRadius, color: 'fur' });
-  bones.push({ name: 'belly_cream', pos: new THREE.Vector3(0, groundY(sagBallY - 0.02), midRow.z + 0.04), radius: sagBallRadius * 0.9, color: 'cream' });
+  bones.push({ name: 'belly_sag', pos: new THREE.Vector3(0, groundY(sagBallY), midRow.z), radius: sagBallRadius, color: 'fur', flow: 0.47 });
+  bones.push({ name: 'belly_cream', pos: new THREE.Vector3(0, groundY(sagBallY - 0.02), midRow.z + 0.04), radius: sagBallRadius * 0.9, color: 'cream', flow: 0.47 });
 
   // Chest blaze — a soft cream ball nestled between the forelegs.
   const chest = rowData[4];
@@ -149,13 +152,14 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     pos: new THREE.Vector3(0, groundY(chest.ry + 0.02), chest.z),
     radius: 0.135 * radiusMul * pose.scaleY,
     color: 'cream',
+    flow: 0.66,
   });
 
   /* ------------------------------ Neck & head ------------------------ */
 
   const neckY = groundY(BASE_SPINE + spineOffset(1) + 0.075);
   const neckZ = mz(0.565);
-  bones.push({ name: 'neck_low', pos: new THREE.Vector3(0, neckY, neckZ), radius: 0.1 * radiusMul * pose.scaleY, color: 'fur' });
+  bones.push({ name: 'neck_low', pos: new THREE.Vector3(0, neckY, neckZ), radius: 0.1 * radiusMul * pose.scaleY, color: 'fur', flow: 0.97 });
 
   const headZ = mz(0.565 + 0.075 + pose.headForward);
   const headBaseY = groundY(BASE_SPINE + spineOffset(1) + 0.27 - pose.headDrop * 0.55);
@@ -170,12 +174,13 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   const local = (x: number, y: number, z: number): THREE.Vector3 =>
     new THREE.Vector3(x * headMul, y * headMul, z * headMul).applyQuaternion(headQuat).add(headCenter);
 
-  bones.push({ name: 'head_cranium', pos: headCenter.clone(), radius: 0.272 * headMul, color: 'fur' });
+  bones.push({ name: 'head_cranium', pos: headCenter.clone(), radius: 0.272 * headMul, color: 'fur', flow: 1.03 });
   bones.push({
     name: 'head_skull',
     pos: local(0, 0.055, -0.085),
     radius: 0.214 * headMul,
     color: 'fur',
+    flow: 1.06,
   });
   // Cheek ruffs — chonk shows up in the face first.
   for (const side of [-1, 1] as const) {
@@ -184,6 +189,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       pos: local(side * 0.124, -0.048, 0.075),
       radius: 0.14 * morph.cheekMul * headMul,
       color: 'fur',
+      flow: 1.13,
     });
   }
   // Muzzle + chin (cream). The double chin is earning its keep.
@@ -192,6 +198,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     pos: local(0, -0.118, 0.208),
     radius: 0.13 * headMul,
     color: 'cream',
+    flow: 1.17,
   });
   const chinRadius = 0.088 * morph.chinMul;
   if (chinRadius > 0.028) {
@@ -200,6 +207,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       pos: local(0, -0.185, 0.125),
       radius: chinRadius,
       color: 'cream',
+      flow: 1.19,
     });
   }
 
@@ -223,6 +231,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
         pos: base.clone().add(dir.clone().multiplyScalar(d)),
         radius: radii[k] * headMul * (1 - (1 - earPerk) * 0.15),
         color: 'fur',
+        flow: 1.24 + k * 0.07,
       });
     }
   }
@@ -240,49 +249,66 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     return groundY(chestRow.ry) - chestRow.rowRadius;
   })();
 
-  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number }> = [];
+  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number; flow: [number, number]; tag: string }> = [];
+
+  // Every leg is a TWO-BONE chain — upper bone and lower bone — solved with a
+  // knee offset from the bisector in the y-z plane. Cat anatomy: front elbows
+  // point back, hind stifles point forward. Ball chains subdivide each bone.
+  const twoBone = (
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    bendZ: number,
+    rA: number,
+    rB: number,
+    rC: number,
+    flowA: [number, number],
+    flowB: [number, number],
+    tag: string,
+  ) => {
+    const unit = b.clone().sub(a).normalize();
+    const perp = new THREE.Vector3(0, unit.z, -unit.y).normalize(); // ⊥ unit in the y–z plane
+    const knee = a.clone().add(b).multiplyScalar(0.5).addScaledVector(perp, bendZ);
+    legSegments.push({ x: a.x, from: a, to: knee, r1: rA, r2: rB, flow: flowA, tag });
+    legSegments.push({ x: a.x, from: knee, to: b, r1: rB, r2: rC, flow: flowB, tag });
+    legSegments.push({ x: a.x, from: knee, to: knee, r1: rB * 0.94, r2: rB * 0.94, flow: [(flowA[1] + flowB[0]) / 2, (flowA[1] + flowB[0]) / 2], tag: `${tag}_knee` });
+    return knee;
+  };
 
   if (pose.legsVisible) {
     for (const side of [-1, 1]) {
-      const x = side * shoulderX;
+      const frontX = side * shoulderX;
       if (pose.frontLegAngle > 0.05) {
-        // Play bow: forelegs reach forward, paws flat on the floor.
+        // Play bow: forelegs reach forward; a soft forward elbow.
         const angle = pose.frontLegAngle;
-        const shoulder = new THREE.Vector3(x, bellyBottomFront + 0.16, frontZ);
+        const shoulder = new THREE.Vector3(frontX, bellyBottomFront + 0.16, frontZ);
         const len = (shoulder.y - 0.055) / Math.cos(angle);
         const tip = new THREE.Vector3(
-          x,
+          frontX,
           shoulder.y - Math.cos(angle) * len,
           frontZ + Math.sin(angle) * len,
         );
-        legSegments.push({ x, from: shoulder, to: tip, r1: 0.1 * legMul, r2: 0.068 * legMul });
+        twoBone(shoulder, tip, 0.05, 0.1 * legMul, 0.074 * legMul, 0.058 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
       } else {
-        // Standing / sitting: straight column from chest to floor.
-        const shoulder = new THREE.Vector3(x, bellyBottomFront + 0.14, frontZ);
-        const ankle = new THREE.Vector3(x, 0.065, frontZ + 0.012);
-        legSegments.push({ x, from: shoulder, to: ankle, r1: 0.1 * legMul, r2: 0.068 * legMul });
+        // Standing / sitting: straight-ish column, elbow tucked slightly back.
+        const shoulder = new THREE.Vector3(frontX, bellyBottomFront + 0.14, frontZ);
+        const ankle = new THREE.Vector3(frontX, 0.065, frontZ + 0.012);
+        twoBone(shoulder, ankle, -0.035, 0.1 * legMul, 0.073 * legMul, 0.057 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
       }
-      // Hindquarter: thigh ball at the hip, shin down to the hock.
+      // Hindquarter: thigh ball at the hip, then a thigh + shin two-bone chain.
       const hipRow = rowData[1];
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.4);
       const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.27));
       if (poseId === 'sitting') {
-        // Shin lies along the floor, paw pushed forward — the classic fold.
-        legSegments.push({
-          x: side * hipX,
-          from: hip.clone().add(new THREE.Vector3(0, -0.01, 0.05)),
-          to: new THREE.Vector3(side * hipX * 0.92, 0.062, mz(0.26)),
-          r1: 0.092 * legMul,
-          r2: 0.084 * legMul,
-        });
+        // Classic sitting fold as a real two-bone chain: thigh down-forward,
+        // then the shin lies along the floor with the paw pushed forward.
+        const stifle = new THREE.Vector3(side * hipX * 1.02, Math.max(0.085, hip.y - 0.035), mz(-0.03));
+        const paw = new THREE.Vector3(side * hipX * 0.92, 0.062, mz(0.26));
+        legSegments.push({ x: side * hipX, from: hip, to: stifle, r1: 0.095 * legMul, r2: 0.075 * legMul, flow: [1.32, 1.52], tag: `hind_${side}_thigh` });
+        legSegments.push({ x: side * hipX, from: stifle, to: paw, r1: 0.072 * legMul, r2: 0.06 * legMul, flow: [1.52, 1.74], tag: `hind_${side}_shin` });
+        legSegments.push({ x: side * hipX, from: stifle, to: stifle, r1: 0.073 * legMul, r2: 0.073 * legMul, flow: [1.52, 1.52], tag: `hind_${side}_knee` });
       } else {
-        legSegments.push({
-          x: side * hipX,
-          from: hip,
-          to: new THREE.Vector3(side * hipX * 0.78, 0.068, mz(0.02)),
-          r1: 0.125 * legMul * morph.haunchSpread,
-          r2: 0.084 * legMul,
-        });
+        const hock = new THREE.Vector3(side * hipX * 0.78, 0.068, mz(0.02));
+        twoBone(hip, hock, 0.085, 0.118 * legMul * morph.haunchSpread, 0.078 * legMul, 0.057 * legMul, [1.3, 1.5], [1.5, 1.74], `hind_${side}`);
       }
       // Haunch muscle ball (the round thigh cats sit on).
       bones.push({
@@ -290,24 +316,30 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
         pos: hip.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
         radius: 0.145 * legMul * morph.haunchSpread * pose.scaleY,
         color: 'fur',
+        flow: 1.28,
       });
     }
   }
 
   for (const seg of legSegments) {
-    // Subdivide each limb bone into balls every ~45% of mean radius.
     const dir = seg.to.clone().sub(seg.from);
     const length = dir.length();
+    if (length < 1e-4) {
+      // Knee cap ball — a single sphere, no chain needed.
+      bones.push({ name: seg.tag, pos: seg.from.clone(), radius: seg.r1, color: 'fur', flow: seg.flow[0] });
+      continue;
+    }
     const meanR = (seg.r1 + seg.r2) / 2;
     const steps = Math.max(2, Math.ceil(length / (meanR * 0.82)));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const radius = seg.r1 + (seg.r2 - seg.r1) * t;
       bones.push({
-        name: `leg_${seg.x > 0 ? 'r' : 'l'}_${i}`,
+        name: `leg_${seg.tag}_${i}`,
         pos: seg.from.clone().lerp(seg.to, t),
         radius,
         color: 'fur',
+        flow: seg.flow[0] + (seg.flow[1] - seg.flow[0]) * t,
       });
     }
   }
@@ -337,9 +369,9 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   for (const [i, paw] of pawBalls.entries()) {
     const pawRadius = 0.095 * pawMul;
     const sockRadius = 0.071 * pawMul;
-    bones.push({ name: `paw_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004, paw.z), radius: pawRadius, color: 'sock' });
+    bones.push({ name: `paw_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004, paw.z), radius: pawRadius, color: 'sock', flow: 1.95 });
     // Sock climbs a little way up the pastern for the classic look.
-    bones.push({ name: `sock_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004 + 0.038, paw.z - 0.008), radius: sockRadius, color: 'sock' });
+    bones.push({ name: `sock_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004 + 0.038, paw.z - 0.008), radius: sockRadius, color: 'sock', flow: 1.9 });
   }
 
   /* ------------------------------ Tail --------------------------------- */
@@ -397,6 +429,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       pos: p,
       radius: Math.max(0.03, radius),
       color: t > 0.82 ? 'saddle' : 'fur',
+      flow: 2.15 + t * 0.75,
     });
   }
 

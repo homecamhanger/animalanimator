@@ -169,17 +169,19 @@ function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall
     fz: (ball.pos.z - FIELD.center.z) / (2 * half) + 0.5,
     cut: Math.sqrt(((FIELD.isolation + FIELD.subtract) * ball.radius * ball.radius) / FIELD.subtract) / (2 * half),
     color: roleColorFor(ball.color, spec),
+    flow: ball.flow,
   }));
 
   // Precompute per-ball cut radii in field units.
   const v = new THREE.Vector3();
-  const sum = { r: 0, g: 0, b: 0, w: 0 };
+  const sum = { r: 0, g: 0, b: 0, w: 0, flow: 0 };
+  const flowAttr = new Float32Array(posAttr.count);
   for (let i = 0; i < posAttr.count; i++) {
     v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
     const fx = (v.x - FIELD.center.x) / (2 * half) + 0.5;
     const fy = (v.y - FIELD.center.y) / (2 * half) + 0.5;
     const fz = (v.z - FIELD.center.z) / (2 * half) + 0.5;
-    sum.r = 0; sum.g = 0; sum.b = 0; sum.w = 0;
+    sum.r = 0; sum.g = 0; sum.b = 0; sum.w = 0; sum.flow = 0;
     for (const ball of fieldBalls) {
       const dx = fx - ball.fx, dy = fy - ball.fy, dz = fz - ball.fz;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -190,12 +192,15 @@ function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall
       sum.g += ball.color.g * contrib;
       sum.b += ball.color.b * contrib;
       sum.w += contrib;
+      sum.flow += ball.flow * contrib;
     }
     if (sum.w > 1e-5) {
       colorAttr.setXYZ(i, sum.r / sum.w, sum.g / sum.w, sum.b / sum.w);
+      flowAttr[i] = sum.flow / sum.w;
     }
   }
   colorAttr.needsUpdate = true;
+  geometry.setAttribute('aFlow', new THREE.BufferAttribute(flowAttr, 1));
 }
 
 function roleColorFor(role: FieldBall['color'], spec: CoatSpec): THREE.Color {
@@ -276,6 +281,93 @@ function smoothstepColor(a: THREE.Color, b: THREE.Color, radius: number): number
 }
 
 /* ------------------------------------------------------------------ */
+/* Field query — used to lock non-fur features onto the isosurface     */
+/* ------------------------------------------------------------------ */
+
+/** Exact field value at a world point (same math as the Marching Cubes). */
+export function fieldAtPoint(p: THREE.Vector3, balls: FieldBall[]): number {
+  const half = FIELD.radius;
+  const res = FIELD.resolution;
+  const axis = (v: number, i: number) =>
+    ((v - FIELD.center.getComponent(i)) / (2 * half) + 0.5) * res;
+  const sub = FIELD.subtract;
+  let sum = 0;
+  for (const ball of balls) {
+    const rField = ball.radius / (2 * half);
+    const strength = (FIELD.isolation + sub) * rField * rField * res * res;
+    const cutoff = Math.sqrt(strength / sub);
+    const dx = axis(p.x, 0) - axis(ball.pos.x, 0);
+    const dy = axis(p.y, 1) - axis(ball.pos.y, 1);
+    const dz = axis(p.z, 2) - axis(ball.pos.z, 2);
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > cutoff * cutoff) continue;
+    sum += strength / (1e-6 + d2) - sub;
+  }
+  return sum;
+}
+
+/**
+ * Distance from `origin` along `dir` until the field drops through the
+ * isosurface (binary-refined). Lets accessories sit exactly on the skin
+ * instead of on top of bone guesses. Falls back to maxDist if the ray
+ * never leaves the solid (should not happen for face features).
+ */
+export function surfaceDistance(
+  balls: FieldBall[],
+  origin: THREE.Vector3,
+  dir: THREE.Vector3,
+  maxDist = 0.9,
+): number {
+  let prevT = 0;
+  let prev = fieldAtPoint(origin, balls);
+  // Origins on/near the surface can start outside the solid — walk backwards
+  // until inside so the march below always sees prev >= isolation.
+  if (prev < FIELD.isolation) {
+    const pre = new THREE.Vector3();
+    let back = 0;
+    for (; back <= 0.45; back += 0.012) {
+      pre.copy(origin).addScaledVector(dir, -back);
+      const f = fieldAtPoint(pre, balls);
+      if (f >= FIELD.isolation) {
+        // Re-anchor: distance returned is measured from the ORIGINAL origin,
+        // so subtract the negative offset walked back.
+        origin = pre.clone();
+        maxDist += back;
+        prevT = 0;
+        prev = f;
+        break;
+      }
+    }
+    if (back > 0.45) return 0; // completely lost — give up gracefully
+  }
+  const steps = 72;
+  for (let i = 1; i <= steps; i++) {
+    const t = (i / steps) * maxDist;
+    const px = origin.x + dir.x * t;
+    const py = origin.y + dir.y * t;
+    const pz = origin.z + dir.z * t;
+    const f = fieldAtPoint(new THREE.Vector3(px, py, pz), balls);
+    if (prev >= FIELD.isolation && f < FIELD.isolation) {
+      let lo = prevT;
+      let hi = t;
+      for (let j = 0; j < 14; j++) {
+        const mid = (lo + hi) / 2;
+        const fm = fieldAtPoint(
+          new THREE.Vector3(origin.x + dir.x * mid, origin.y + dir.y * mid, origin.z + dir.z * mid),
+          balls,
+        );
+        if (fm >= FIELD.isolation) lo = mid;
+        else hi = mid;
+      }
+      return (lo + hi) / 2;
+    }
+    prevT = t;
+    prev = f;
+  }
+  return maxDist;
+}
+
+/* ------------------------------------------------------------------ */
 /* Fur material (vertex colours + procedural mackerel bands)           */
 /* ------------------------------------------------------------------ */
 
@@ -292,8 +384,8 @@ export function makeFurMaterial(spec: CoatSpec): THREE.MeshStandardMaterial {
     shader.uniforms.uStripeColor = { value: new THREE.Color(spec.stripe) };
     shader.uniforms.uStripeStrength = { value: spec.stripeStrength };
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aStripe;\nvarying vec3 vFurPos;\nvarying float vStripeMask;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFurPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvStripeMask = aStripe;');
+      .replace('#include <common>', '#include <common>\nattribute float aStripe;\nattribute float aFlow;\nvarying vec3 vFurPos;\nvarying float vStripeMask;\nvarying float vFlow;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFurPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvStripeMask = aStripe;\nvFlow = aFlow;');
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
@@ -302,6 +394,7 @@ export function makeFurMaterial(spec: CoatSpec): THREE.MeshStandardMaterial {
         uniform float uStripeStrength;
         varying vec3 vFurPos;
         varying float vStripeMask;
+        varying float vFlow;
         float furHash(vec3 p) {
           p = fract(p * vec3(443.897, 441.423, 437.195));
           p += dot(p, p.yzx + 19.19);
@@ -332,8 +425,9 @@ export function makeFurMaterial(spec: CoatSpec): THREE.MeshStandardMaterial {
         {
           vec3 fp = vFurPos;
           float wobble = furNoise(fp * 3.2) * 2.6;
-          // mackerel bars run across the torso (constant z), wobbling with the flank
-          float band = sin(fp.z * 46.0 + wobble + sin(fp.y * 5.2) * 0.85);
+          // mackerel bars run PERPENDICULAR to the animal's own axis
+          // (spine → neck → head → limbs/tail), wobbling organically
+          float band = sin(vFlow * 44.0 + wobble);
           float stripe = smoothstep(0.38, 0.96, band) * vStripeMask * uStripeStrength;
           diffuseColor.rgb = mix(diffuseColor.rgb, uStripeColor, stripe * 0.9);
           // guard-hair speckle kills the plastic look
