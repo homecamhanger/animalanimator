@@ -117,6 +117,13 @@ export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin
   for (const ball of balls) {
     const f = fieldOf(ball.pos);
     const rNorm = ball.radius / (2 * half);
+    if (ball.dent) {
+      // Negative strength — carves a dish (the MarchingCubes sign-mirrors the
+      // contribution with the same plasma radius). No colour is injected:
+      // vertex colours are re-normalised from skinBalls below.
+      mc.addBall(f.x, f.y, f.z, -FIELD.subtract * rNorm * rNorm, FIELD.subtract);
+      continue;
+    }
     // strength = (isolation + subtract) * r²  → ball radius ≈ authored radius
     const strength = (FIELD.isolation + FIELD.subtract) * rNorm * rNorm;
     mc.addBall(f.x, f.y, f.z, strength, FIELD.subtract, roleColor(ball.color));
@@ -163,7 +170,7 @@ function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
   const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
   const half = FIELD.radius;
-  const fieldBalls = balls.map((ball) => ({
+  const fieldBalls = balls.filter((ball) => !ball.dent).map((ball) => ({
     fx: (ball.pos.x - FIELD.center.x) / (2 * half) + 0.5,
     fy: (ball.pos.y - FIELD.center.y) / (2 * half) + 0.5,
     fz: (ball.pos.z - FIELD.center.z) / (2 * half) + 0.5,
@@ -294,6 +301,19 @@ export function fieldAtPoint(p: THREE.Vector3, balls: FieldBall[]): number {
   let sum = 0;
   for (const ball of balls) {
     const rField = ball.radius / (2 * half);
+    const rCells = rField * res;
+    if (ball.dent) {
+      // MC adds: sub - |s|/d² inside the plasma sphere, 0 outside.
+      const cutoff = rCells;
+      const strength = sub * rCells * rCells;
+      const dx = axis(p.x, 0) - axis(ball.pos.x, 0);
+      const dy = axis(p.y, 1) - axis(ball.pos.y, 1);
+      const dz = axis(p.z, 2) - axis(ball.pos.z, 2);
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > cutoff * cutoff) continue;
+      sum += sub - strength / (1e-6 + d2);
+      continue;
+    }
     const strength = (FIELD.isolation + sub) * rField * rField * res * res;
     const cutoff = Math.sqrt(strength / sub);
     const dx = axis(p.x, 0) - axis(ball.pos.x, 0);

@@ -138,11 +138,14 @@ export function buildKitten(options: KittenOptions): KittenBuild {
     new THREE.Vector3(x * headMul, y * headMul, z * headMul).applyQuaternion(headQuat).add(headPos);
   const headDir = (x: number, y: number, z: number): THREE.Vector3 =>
     new THREE.Vector3(x, y, z).normalize().applyQuaternion(headQuat);
+  // Socketless field for eye placement — eyes nest into the carved sockets,
+  // so they anchor to the skull surface without the dent contribution.
+  const socketless = skeleton.balls.filter((ball) => !ball.dent);
   /** March from a head-local offset point along a world direction; return the surface hit. */
-  const snapFromLocal = (lx: number, ly: number, lz: number, dx: number, dy: number, dz: number, embed: number) => {
+  const snapFromLocal = (lx: number, ly: number, lz: number, dx: number, dy: number, dz: number, embed: number, ignoreDents = false) => {
     const origin = localWorld(lx, ly, lz);
     const dir = headDir(dx, dy, dz);
-    const t = surfaceDistance(skeleton.balls, origin, dir);
+    const t = surfaceDistance(ignoreDents ? socketless : skeleton.balls, origin, dir);
     return { point: origin.clone().addScaledVector(dir, t + embed), dir };
   };
   const faceQuat = (dir: THREE.Vector3): THREE.Quaternion =>
@@ -155,22 +158,22 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   closedEyes.name = 'closedEyes';
   const eyeMaterialFor = eyeMaterial(options.coat);
   for (const side of [-1, 1]) {
-    const { point, dir } = snapFromLocal(side * 0.145, 0.045, 0.02, side * 0.1, 0.06, 1, -0.016);
+    const { point, dir } = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, -0.014, true);
     const eyeGroup = new THREE.Group();
     eyeGroup.position.copy(point);
     eyeGroup.quaternion.copy(faceQuat(dir));
 
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.0575, 20, 16), eyeMaterialFor);
-    eye.scale.set(1, 1.14, 0.68);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.052, 20, 16), eyeMaterialFor);
+    eye.scale.set(0.92, 1.18, 0.55);
     eyeGroup.add(eye);
 
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0295, 12, 10), sharedMats.pupil);
     pupil.scale.set(0.52, 1.05, 0.52);
-    pupil.position.set(0, 0.002, 0.0335);
+    pupil.position.set(0, 0.002, 0.0282);
     eyeGroup.add(pupil);
 
     const glint = new THREE.Mesh(new THREE.SphereGeometry(0.0125, 8, 8), sharedMats.glint);
-    glint.position.set(-0.017, 0.023, 0.0525);
+    glint.position.set(-0.016, 0.022, 0.044);
     eyeGroup.add(glint);
     mark(eye);
     openEyes.add(eyeGroup);
@@ -179,7 +182,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
       new THREE.TorusGeometry(0.051, 0.011, 8, 20, Math.PI),
       sharedMats.closedEye,
     );
-    const arcSnap = snapFromLocal(side * 0.145, 0.045, 0.02, side * 0.1, 0.06, 1, 0.006);
+    const arcSnap = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, 0.006, true);
     arc.position.copy(arcSnap.point);
     arc.quaternion.copy(faceQuat(arcSnap.dir));
     closedEyes.add(arc);

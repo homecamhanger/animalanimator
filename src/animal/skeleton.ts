@@ -36,6 +36,8 @@ export interface FieldBall {
   /** Arc-length-ish coordinate along the animal (0 = rump → ~1 = face, >1 limbs/tail).
    *  The stripe shader bands on this instead of world axes. */
   flow: number;
+  /** True for negative-strength balls that CARVE the field (eye sockets, pinna scoops). */
+  dent?: boolean;
 }
 
 export interface SkeletonAnchors {
@@ -236,6 +238,38 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     }
   }
 
+  /* ---------------- Head dents — carved after the ears are known ------- */
+  // Eye sockets: anti-balls sitting just proud of the cranium surface, so the
+  // MC field dips into a dish around each eye. The eyes themselves are placed
+  // against the socketless surface, so they nestle into the dishes.
+  for (const side of [-1, 1]) {
+    bones.push({
+      name: `eye_socket_${side}`,
+      pos: local(side * 0.135, 0.06, 0.205),
+      radius: 0.095 * headMul,
+      color: 'fur',
+      flow: 1.05,
+      dent: true,
+    });
+  }
+  // Pinna scoops: one anti-ball per ear, on the ear's front face (face-forward
+  // normal with the ear-axis component removed), so each ear grows a concave
+  // dish the inner-ear lozenge can sit in.
+  const faceForward = new THREE.Vector3(0, 0.15, 1).applyQuaternion(headQuat).normalize();
+  for (const { base, dir } of earDirs) {
+    const along = dir.clone().normalize();
+    const pinnaNormal = faceForward.clone().addScaledVector(along, -faceForward.dot(along)).normalize();
+    const mid = base.clone().addScaledVector(along, 0.1125 * headMul);
+    bones.push({
+      name: 'ear_scoop',
+      pos: mid.addScaledVector(pinnaNormal, 0.012),
+      radius: 0.082 * headMul,
+      color: 'fur',
+      flow: 1.3,
+      dent: true,
+    });
+  }
+
   /* ------------------------------ Legs -------------------------------- */
 
   const legMul = morph.legMul;
@@ -307,7 +341,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
         legSegments.push({ x: side * hipX, from: stifle, to: paw, r1: 0.072 * legMul, r2: 0.06 * legMul, flow: [1.52, 1.74], tag: `hind_${side}_shin` });
         legSegments.push({ x: side * hipX, from: stifle, to: stifle, r1: 0.073 * legMul, r2: 0.073 * legMul, flow: [1.52, 1.52], tag: `hind_${side}_knee` });
       } else {
-        const hock = new THREE.Vector3(side * hipX * 0.78, 0.068, mz(0.02));
+        const hock = new THREE.Vector3(side * hipX * 0.78, 0.068, mz(-0.075));
         twoBone(hip, hock, 0.085, 0.118 * legMul * morph.haunchSpread, 0.078 * legMul, 0.057 * legMul, [1.3, 1.5], [1.5, 1.74], `hind_${side}`);
       }
       // Haunch muscle ball (the round thigh cats sit on).
@@ -358,7 +392,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       } else {
         pawBalls.push({ x, z: frontZ + 0.035 });
       }
-      pawBalls.push({ x: side * hipX * 0.78, z: mz(poseId === 'sitting' ? 0.29 : 0.085) });
+      pawBalls.push({ x: side * hipX * 0.78, z: mz(poseId === 'sitting' ? 0.29 : -0.055) });
     }
   } else {
     // Loaf / curled: just the white tips peeking out from under the chest.
