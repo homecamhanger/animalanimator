@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnimalAnimator · Procedural Kitten Studio</title>
+    <meta
+      name="description"
+      content="Procedurally generated 3D kitten — sculpt its body weight from skinny to mega-chonk, pose it, and export PNGs or a weight × pose contact sheet. Zero mesh files."
+    />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e2a63f'/%3E%3Cpath d='M9 12.5 10.2 6.8 14.6 10a9.4 9.4 0 0 1 2.8 0l4.4-3.2L23 12.5c1.8 1.4 2.8 3.3 2.8 5.4 0 4.3-3.3 7.1-9.8 7.1s-9.8-2.8-9.8-7.1c0-2.1 1-4 2.8-5.4Z' fill='%231d1712'/%3E%3Ccircle cx='12.4' cy='17.6' r='1.15' fill='%23e2a63f'/%3E%3Ccircle cx='19.6' cy='17.6' r='1.15' fill='%23e2a63f'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,400..700&family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <!-- 3D stage -->
+      <div id="stage" class="backdrop-studio" aria-hidden="false">
+        <canvas id="scene" aria-label="Interactive 3D kitten. Drag to orbit, scroll to zoom."></canvas>
+      </div>
+
+      <!-- Brand -->
+      <header class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="34" height="34">
+            <rect width="32" height="32" rx="9" fill="#e2a63f" />
+            <path
+              d="M9 12.5 10.2 6.8 14.6 10a9.4 9.4 0 0 1 2.8 0l4.4-3.2L23 12.5c1.8 1.4 2.8 3.3 2.8 5.4 0 4.3-3.3 7.1-9.8 7.1s-9.8-2.8-9.8-7.1c0-2.1 1-4 2.8-5.4Z"
+              fill="#1d1712"
+            />
+            <circle cx="12.4" cy="17.6" r="1.15" fill="#e2a63f" />
+            <circle cx="19.6" cy="17.6" r="1.15" fill="#e2a63f" />
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>AnimalAnimator</h1>
+          <p>Procedural kitten atelier</p>
+        </div>
+        <a class="github-link" href="https://github.com/homecamhanger/animalanimator" target="_blank" rel="noreferrer" aria-label="View source on GitHub">
+          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+            />
+          </svg>
+          <span>Source</span>
+        </a>
+      </header>
+
+      <!-- Control panel -->
+      <aside class="panel" aria-label="Kitten controls">
+        <div class="panel-scroll">
+          <!-- Species -->
+          <section class="section">
+            <h2 class="section-title">Species</h2>
+            <div class="species-grid" id="species-grid"></div>
+          </section>
+
+          <!-- Pose -->
+          <section class="section">
+            <h2 class="section-title">Pose</h2>
+            <div class="pose-grid" id="pose-grid"></div>
+          </section>
+
+          <!-- Weight -->
+          <section class="section">
+            <h2 class="section-title">
+              Body weight
+              <span class="section-title-note">same cat, five sizes</span>
+            </h2>
+            <div class="weight-readout">
+              <div class="weight-kg"><span id="weight-kg">3.4</span><em>kg</em></div>
+              <div class="weight-label" id="weight-label">Average</div>
+            </div>
+            <input
+              type="range"
+              id="weight-slider"
+              class="weight-slider"
+              min="65"
+              max="170"
+              step="1"
+              value="100"
+              aria-label="Body weight, from skinny to mega-chonk"
+            />
+            <div class="slider-ticks" aria-hidden="true">
+              <span>Skinny</span><span>Average</span><span>Chonk</span>
+            </div>
+            <div class="bcs-block">
+              <div class="bcs-header">
+                <span>Body condition</span>
+                <span id="bcs-caption">BCS 5/9 · ideal</span>
+              </div>
+              <div class="bcs-bar" id="bcs-bar" role="img" aria-label="Body condition score, 5 out of 9, ideal"></div>
+            </div>
+            <div class="chip-row" id="weight-presets"></div>
+          </section>
+
+          <!-- Coat -->
+          <section class="section">
+            <h2 class="section-title">
+              Coat
+              <span class="section-title-note" id="coat-name">Orange Tabby</span>
+            </h2>
+            <div class="coat-row" id="coat-row"></div>
+          </section>
+
+          <p class="panel-footnote">
+            Every vertex is generated in your browser at runtime.<br />No 3D model files are loaded.
+          </p>
+        </div>
+      </aside>
+
+      <!-- Export toolbar -->
+      <div class="toolbar" role="toolbar" aria-label="Export and view options">
+        <div class="toolbar-row">
+          <div class="view-switch" id="view-switch" role="group" aria-label="Camera view">
+            <button class="view-chip is-active" data-view="three-quarter">¾</button>
+            <button class="view-chip" data-view="front">Front</button>
+            <button class="view-chip" data-view="side">Side</button>
+            <button class="view-chip" data-view="top">Top</button>
+          </div>
+          <div class="toolbar-divider" aria-hidden="true"></div>
+          <button class="icon-toggle is-active" id="toggle-rotate" aria-pressed="true" title="Auto-rotate turntable">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.1 12a8.1 8.1 0 1 1-2.4-5.75" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20.6 3.6v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-toggle is-active" id="toggle-idle" aria-pressed="true" title="Idle motion (breathing, blinking, tail sway)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12.5c2.5 0 2.5-4 5-4s2.5 7 5 7 2.5-5.5 5-5.5 2 2.5 3 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-toggle" id="button-randomize" title="Surprise me — random pose, weight and coat">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9.2" cy="9.2" r="1.35" fill="currentColor"/><circle cx="14.8" cy="9.2" r="1.35" fill="currentColor"/><circle cx="12" cy="12" r="1.35" fill="currentColor"/><circle cx="9.2" cy="14.8" r="1.35" fill="currentColor"/><circle cx="14.8" cy="14.8" r="1.35" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="toolbar-row">
+          <button class="tool-button" id="button-turntable" title="Record one full turntable revolution as WebM">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></svg>
+            <span>Turntable</span>
+          </button>
+          <button class="tool-button" id="button-sheet" title="Render every pose at five weights to one contact sheet PNG">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="7" height="6.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="4.5" width="7" height="6.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3.5" y="13.9" width="7" height="6.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13.5" y="13.9" width="7" height="6.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+            <span>Contact sheet</span>
+          </button>
+          <button class="tool-button tool-button-primary" id="button-snapshot" title="Download the current view as a high-resolution PNG">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10.2M8.4 11 12 14.6 15.6 11" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.5 15.5v3.1a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3.1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+            <span>Save PNG</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Backdrop picker -->
+      <div class="backdrop-picker" id="backdrop-picker" role="group" aria-label="Backdrop"></div>
+
+      <!-- HUD -->
+      <div class="hud" id="hud" aria-live="polite">— VERTS · — TRIS</div>
+
+      <!-- Hint -->
+      <div class="hint">Drag to orbit · Scroll to zoom · <kbd>1</kbd>–<kbd>5</kbd> poses · <kbd>Q</kbd>/<kbd>E</kbd> weight</div>
+
+      <!-- Toast -->
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

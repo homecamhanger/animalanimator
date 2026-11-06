@@ -1,0 +1,25 @@
+{
+  "name": "animalanimator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Procedural 3D animal generator — kitten first, with morphable body weight, multiple poses, coats and PNG/contact-sheet rendering.",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check:profiles": "tsx scripts/check-profiles.ts",
+    "check:builds": "tsx scripts/smoke-build.ts",
+    "check": "npm run check:profiles && npm run check:builds"
+  },
+  "dependencies": {
+    "three": "^0.171.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/three": "^0.171.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.7"
+  }
+}
