@@ -73,7 +73,7 @@ interface SpineRow {
 
 const TORSO_ROWS: SpineRow[] = [
   { t: 0.02, offsetFrac: 0.0, r: 0.148, sag: 0.0, belly: false }, // rump tip
-  { t: 0.13, offsetFrac: 0.56, r: 0.205, sag: 0.005, belly: false }, // haunches
+  { t: 0.13, offsetFrac: 0.44, r: 0.19, sag: 0.005, belly: false }, // haunches
   { t: 0.3, offsetFrac: 0.5, r: 0.172, sag: 0.012, belly: false }, // waist
   { t: 0.47, offsetFrac: 0.47, r: 0.178, sag: 0.03, belly: true }, // mid belly
   { t: 0.66, offsetFrac: 0.48, r: 0.185, sag: 0.012, belly: false }, // chest
@@ -388,7 +388,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.52);
       const hipY = haunchY + (poseId === 'sitting' ? -0.02 : 0);
       const hip = new THREE.Vector3(side * hipJointX, hipY, mz(-0.44));
-      const haunchMass = new THREE.Vector3(side * hipX, hipY, mz(-0.44));
+      const haunchMass = new THREE.Vector3(side * hipX * 0.9, hipY, mz(-0.44));
       const hind = tuning.hind;
       const femurDir = new THREE.Vector3(0, -Math.sin(rad(hind.femurAngle)), Math.cos(rad(hind.femurAngle)));
       const tibiaDir = femurDir.clone().applyAxisAngle(X_AXIS, rad(180 - hind.stifleAngle));
@@ -422,7 +422,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       bones.push({
         name: `thigh_${side}`,
         pos: haunchMass.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
-        radius: 0.145 * legMul * morph.haunchSpread * pose.scaleY,
+        radius: 0.112 * legMul * morph.haunchSpread * pose.scaleY,
         color: 'fur',
         flow: 1.28,
       });
