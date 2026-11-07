@@ -295,9 +295,12 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   /* ------------------------------ Legs -------------------------------- */
 
   const legMul = morph.legMul;
-  const pawMul = morph.pawMul;
   const shoulderX = clamp(0.148 * widthMul + 0.012, 0.115, 0.26);
   const hipX = clamp(rowData[1].offset + rowData[1].rowRadius * 0.55, 0.16, 0.38);
+  // The hip JOINT attaches closer to the midline — the haunch keeps its
+  // wide mass, but the limb roots medially (the femur head is medial), so
+  // the legs track under the body instead of splaying past the torso.
+  const hipJointX = clamp(hipX * 0.72, 0.115, 0.32);
   const frontZ = mz(0.4);
   const bellyBottomFront = (() => {
     // approximate underside of the chest row at the foreleg z
@@ -305,7 +308,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     return groundY(chestRow.ry) - chestRow.rowRadius;
   })();
 
-  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number; flow: [number, number]; tag: string }> = [];
+  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number; flow: [number, number]; tag: string; color?: BallColor }> = [];
 
   // Every leg is a TWO-BONE chain — upper bone and lower bone — solved with a
   // knee offset from the bisector in the y-z plane. Cat anatomy: front elbows
@@ -327,8 +330,8 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     curled: 0.0238,
   };
   const FRONT_PLANT_Y: Record<PoseId, number> = {
-    standing: 0.1967,
-    sitting: 0.0895,
+    standing: 0.065,
+    sitting: 0.065,
     stretch: -0.1777,
     loaf: -0.1993,
     curled: -0.2063,
@@ -343,8 +346,6 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     curled: 1,
   };
   const toeTurnSign = TOE_TURN_SIGN[poseId];
-  const frontPaw: Array<{ x: number; z: number }> = [];
-  const hindPaw: Array<{ x: number; z: number }> = [];
   // Legs exist in EVERY pose — loaf/curled fold them under the body instead
   // of deleting them, so the haunches keep their volume.
   for (const side of [-1, 1]) {
@@ -365,24 +366,29 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       const frontDy = clamp(FRONT_PLANT_Y[poseId] - composeFront(shoulder).wrist.y, -MAX_CHAIN_SHIFT, MAX_CHAIN_SHIFT);
       const frontOrigin = shoulder.clone().add(new THREE.Vector3(0, frontDy, 0));
       const { elbow, wrist } = composeFront(frontOrigin);
+      // Cats carry their socks on the lower foreleg — split the forearm so
+      // the toe/pastern zone goes white, following the limb exactly.
+      const frontSplit = elbow.clone().lerp(wrist, 0.48);
       const frontChain = [
         { to: elbow, r1: 0.1 * legMul, r2: 0.074 * legMul, flow: [1.32, 1.52] as [number, number], tag: 'upper' },
-        { to: wrist, r1: 0.074 * legMul, r2: 0.058 * legMul, flow: [1.52, 1.74] as [number, number], tag: 'lower' },
+        { to: frontSplit, r1: 0.074 * legMul, r2: 0.066 * legMul, flow: [1.52, 1.64] as [number, number], tag: 'lowerA' },
+        { to: wrist, r1: 0.066 * legMul, r2: 0.058 * legMul, flow: [1.64, 1.74] as [number, number], tag: 'lowerB', color: 'sock' as BallColor },
       ];
       let prevFront = frontOrigin;
       for (const seg of frontChain) {
-        legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}` });
+        legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}`, color: seg.color });
         legSegments.push({ x: frontX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `front_${side}_joint` });
         prevFront = seg.to;
       }
-      frontPaw.push({ x: wrist.x, z: wrist.z });
       // Hindquarter: the femur attaches at almost the complete rear of the
       // body (not counting the tail base), the tibia folds at a near-right
       // angle, and the metatarsus folds back the other way so it runs nearly
       // parallel to the femur — the classic digitigrade Z.
       const hipRow = rowData[1];
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.52);
-      const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.44));
+      const hipY = haunchY + (poseId === 'sitting' ? -0.02 : 0);
+      const hip = new THREE.Vector3(side * hipJointX, hipY, mz(-0.44));
+      const haunchMass = new THREE.Vector3(side * hipX, hipY, mz(-0.44));
       const hind = tuning.hind;
       const femurDir = new THREE.Vector3(0, -Math.sin(rad(hind.femurAngle)), Math.cos(rad(hind.femurAngle)));
       const tibiaDir = femurDir.clone().applyAxisAngle(X_AXIS, rad(180 - hind.stifleAngle));
@@ -398,23 +404,24 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       const hindDy = clamp(HIND_PLANT_Y[poseId] - composeHind(hip).toe.y, -MAX_CHAIN_SHIFT, MAX_CHAIN_SHIFT);
       const hindOrigin = hip.clone().add(new THREE.Vector3(0, hindDy, 0));
       const { stifle, hock, mtp, toe } = composeHind(hindOrigin);
+      const metSplit = hock.clone().lerp(mtp, 0.5);
       const chain = [
         { to: stifle, r1: 0.125 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
         { to: hock, r1: 0.068 * legMul, r2: 0.05 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-        { to: mtp, r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-        { to: toe, r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+        { to: metSplit, r1: 0.045 * legMul, r2: 0.043 * legMul, flow: [1.58, 1.66] as [number, number], tag: 'metatarsus' },
+        { to: mtp, r1: 0.043 * legMul, r2: 0.041 * legMul, flow: [1.66, 1.7] as [number, number], tag: 'metatarsusB', color: 'sock' as BallColor },
+        { to: toe, r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx', color: 'sock' as BallColor },
       ];
       let prevJoint = hindOrigin;
       for (const seg of chain) {
-        legSegments.push({ x: side * hipX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
-        legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
+        legSegments.push({ x: side * hipJointX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}`, color: seg.color });
+        legSegments.push({ x: side * hipJointX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
         prevJoint = seg.to;
       }
-      hindPaw.push({ x: toe.x, z: toe.z });
       // Haunch muscle ball (the round thigh cats sit on) — every pose.
       bones.push({
         name: `thigh_${side}`,
-        pos: hip.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
+        pos: haunchMass.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
         radius: 0.145 * legMul * morph.haunchSpread * pose.scaleY,
         color: 'fur',
         flow: 1.28,
@@ -439,33 +446,10 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
         name: `leg_${seg.tag}_${i}`,
         pos: seg.from.clone().lerp(seg.to, t),
         radius,
-        color: 'fur',
+        color: seg.color ?? 'fur',
         flow: seg.flow[0] + (seg.flow[1] - seg.flow[0]) * t,
       });
     }
-  }
-
-  /* ------------------------------ Paws -------------------------------- */
-
-  const pawBalls: Array<{ x: number; z: number }> = [];
-  if (pose.legsVisible) {
-    for (const side of [-1, 1]) {
-      const i = side < 0 ? 0 : 1;
-      pawBalls.push({ x: frontPaw[i].x, z: frontPaw[i].z });
-      pawBalls.push({ x: hindPaw[i].x, z: hindPaw[i].z });
-    }
-  } else {
-    // Loaf / curled: just the white tips peeking out from under the chest.
-    for (const side of [-1, 1]) {
-      pawBalls.push({ x: side * 0.118, z: mz(0.475) });
-    }
-  }
-  for (const [i, paw] of pawBalls.entries()) {
-    const pawRadius = 0.095 * pawMul;
-    const sockRadius = 0.071 * pawMul;
-    bones.push({ name: `paw_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004, paw.z), radius: pawRadius, color: 'sock', flow: 1.95 });
-    // Sock climbs a little way up the pastern for the classic look.
-    bones.push({ name: `sock_${i}`, pos: new THREE.Vector3(paw.x, pawRadius - 0.004 + 0.038, paw.z - 0.008), radius: sockRadius, color: 'sock', flow: 1.9 });
   }
 
   /* ------------------------------ Tail --------------------------------- */

@@ -177,6 +177,9 @@ function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall
     cut: Math.sqrt(((FIELD.isolation + FIELD.subtract) * ball.radius * ball.radius) / FIELD.subtract) / (2 * half),
     color: roleColorFor(ball.color, spec),
     flow: ball.flow,
+    // Sock atoms are intentionally small (they never reshape the silhouette),
+    // so they get a role weight to keep the white decisive in the average.
+    weight: ball.color === 'sock' ? 1.9 : 1,
   }));
 
   // Precompute per-ball cut radii in field units.
@@ -194,7 +197,7 @@ function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist >= ball.cut) continue;
       const ratio = dist / ball.cut;
-      const contrib = 1 - ratio * ratio * ratio * (ratio * (ratio * 6 - 15) + 10);
+      const contrib = (1 - ratio * ratio * ratio * (ratio * (ratio * 6 - 15) + 10)) * ball.weight;
       sum.r += ball.color.r * contrib;
       sum.g += ball.color.g * contrib;
       sum.b += ball.color.b * contrib;

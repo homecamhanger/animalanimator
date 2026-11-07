@@ -102,8 +102,8 @@ const HIND_DEFAULTS: Record<PoseId, HindTuning> = {
 };
 
 const FRONT_DEFAULTS: Record<PoseId, FrontTuning> = {
-  standing: { upperLen: 0.205, upperAngle: 84, lowerLen: 0.215, elbowAngle: 166 },
-  sitting: { upperLen: 0.17, upperAngle: 80, lowerLen: 0.185, elbowAngle: 160 },
+  standing: { upperLen: 0.275, upperAngle: 84, lowerLen: 0.28, elbowAngle: 166 },
+  sitting: { upperLen: 0.2, upperAngle: 80, lowerLen: 0.185, elbowAngle: 160 },
   stretch: { upperLen: 0.245, upperAngle: 60, lowerLen: 0.235, elbowAngle: 172 },
   loaf: { upperLen: 0.19, upperAngle: 82, lowerLen: 0.2, elbowAngle: 160 },
   curled: { upperLen: 0.19, upperAngle: 82, lowerLen: 0.2, elbowAngle: 160 },
