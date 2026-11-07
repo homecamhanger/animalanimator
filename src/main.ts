@@ -334,7 +334,7 @@ anatomyRow.querySelectorAll<HTMLButtonElement>('[data-anatomy]').forEach((button
 });
 
 function setSkeletonMode(mode: string): void {
-  viewer.setSkeletonMode(mode as 'off' | 'overlay' | 'bones-only');
+  viewer.setSkeletonMode(mode as 'off' | 'overlay' | 'bones-only' | 'weights');
   for (const [id, button] of anatomyButtons) {
     const active = id === mode;
     button.classList.toggle('is-active', active);

@@ -83,7 +83,45 @@ ossicles). We draw 215 *segments*. Omitted, deliberately:
    geometry — the *fit* is as good as that solve (verified visually against
    `.scratch/mesh-standing.json`).
 
-## Skinning — the next conversation
+## Skinning — status
+
+**Step 1 shipped: the analytic weight solver.**
+
+- `src/animal/skinWeights.ts` — per-vertex weights: distance to every bone
+  (capsule / sampled Bézier for curved bones / ellipsoid / weakened plate),
+  `exp(-(d/σ)²)` fields, top-4 influences renormalised. Pure function of
+  position → the unindexed marching-cubes shell never seams.
+- Verified on the standing mesh (w=1.0, orange tabby): **48 756 vertices,
+  215 bones, solve ≈ 230 ms, row sums exactly 1, zero orphan bones**, mass
+  by region — hindlimb 26.6 %, skull 25.6 %, forelimb 18.3 %, tail 13.9 %,
+  spine 10.1 %, ribcage 5.6 %. Dewclaw (MC1) and vestigial Mt1 carry weight
+  like everything else.
+- **Try it:** sidebar → Anatomy → **Weights** — the fur is repainted by
+  dominant bone (skull gold, spine magenta, forelimb teal, hindlimb orange,
+  ribcage blue, tail purple), shaded by dominance.
+- `npm run check:weights` (in `npm run check`) — rows normalise to 1, no
+  vertex bound to nothing, no orphan bones, dewclaw/Mt1 explicitly asserted.
+  `npx tsx scripts/solve-weights.ts` prints the full report and writes
+  `.scratch/weights-mesh.json` (+ `weights-mesh.json` renders via
+  `scripts/render-preview.py`).
+
+**Known weakness & the lever to pull.** Deep axial bones (mid thoracics,
+small carpals) each bind < 0.05 % of mass — the softmax favours shallow bones
+near the surface. The smooth top-4 spread across adjacent vertebrae keeps
+deformation correct, but for the sit/stretch spine bend, if we see
+under-deformation, the fix is a per-bone reach multiplier (deep bones get a
+wider σ), or a Bone-Heat-style Laplacian diffusion pass as the documented
+fallback. Not measured as broken — noted before it becomes one.
+
+**Remaining roadmap:**
+
+2. Runtime DQS deformation in the viewer behind a toggle (`Fur SDF | Skinned`).
+3. Re-target the 5 poses onto the rig (poses already exist as two-bone
+   chains; they transplant onto femur/tibia, humerus/radius).
+4. Corrective pass for sit & stretch.
+5. Retire the SDF pose path (keep SDF only for construction + idle detail).
+
+## Skinning — the options we weighed
 
 You said it: there are many ways to bind skin to bones. Here is the honest
 map, with a recommendation, so the next wave starts with a decision.
@@ -135,15 +173,15 @@ The options, ranked by fit to this project:
 - "Skinning" here does not mean deleting the SDF pipeline overnight — the
   breathing/idle micro-motion should probably stay procedural.
 
-**Order of operations I would propose** (each step independently shippable):
+**Order of operations** (each step independently shippable):
 
-1. `scripts/solve-weights.ts` — offline per-vertex weight solve → `.bin`
-   weights asset + report (histogram, min-effective-bone count per vertex).
+1. ~~`scripts/solve-weights.ts`~~ — **done** (see "status" above). Runtime
+   DQS bind will consume `computeSkinWeights()` directly.
 2. Runtime DQS deformation in the viewer behind a toggle (`Fur SDF | Skinned`).
 3. Re-target the 5 poses onto the rig (poses exist as 2-bone chains already —
    they transplant almost verbatim onto femur/tibia, humerus/radius).
 4. Corrective pass for sit & stretch (the two poses with the deepest folds).
-5. Decide whether SDF morphs retire or stay for idle detail.
+5. Retire the SDF pose path (keep SDF only for construction + idle detail).
 
 **Open questions for you**
 
@@ -159,4 +197,7 @@ The options, ranked by fit to this project:
 - `scripts/probe-skeleton.ts` — print the registered mesh landmarks
 - `scripts/dump-anatomy.ts` / `render-anatomy.py` — JSON dump + 2D preview
 - `scripts/render-overlay.py` — x-ray composite (fur ghost + bones)
+- `src/animal/skinWeights.ts` — the analytic weight solver + region debug palette
+- `scripts/solve-weights.ts` — offline solve + report + painted dump
+- `scripts/check-weights.ts` — `npm run check:weights`
 - `scripts/check-anatomy.ts` — `npm run check:anatomy`

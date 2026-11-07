@@ -13,6 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { POSE_ORDER, POSE_PARAMS, type PoseId } from '../animal/profiles';
 import type { KittenBuild, KittenMetrics, KittenInternals } from '../animal/kitten';
 import { buildSkeletonGroup, type SkeletonMode } from './skeletonScene';
+import { computeSkinWeights, paintBoneWeightColors } from '../animal/skinWeights';
 import type { AnimalSpec } from '../animal/registry';
 import type { LegTuning } from '../animal/tuning';
 import { backdropById, paintBackdrop, type BackdropId } from './backdrop';
@@ -64,6 +65,7 @@ export class KittenViewer {
   private skeletonGroup: THREE.Group | null = null;
   private skeletonMode: SkeletonMode = 'off';
   private furFade: { transparent: boolean; opacity: number; depthWrite: boolean } | null = null;
+  private weightsMaterial: THREE.MeshBasicMaterial | null = null;
   private rebuildQueued = false;
   private idleMotion = true;
   private breathGain = 1;
@@ -364,6 +366,7 @@ export class KittenViewer {
   }
 
   private applySkeletonMode(): void {
+    const restoreWeights = (): void => this.restoreWeights();
     // Lazily create the skeleton once; it is static (standing rest pose) and lives in the mesh's frame.
     if (!this.skeletonGroup) {
       this.skeletonGroup = buildSkeletonGroup();
@@ -385,10 +388,23 @@ export class KittenViewer {
     };
 
     restoreFur();
+    restoreWeights();
 
     if (this.skeletonMode === 'off') {
       bones.visible = false;
       if (internals) internals.breathRoot.visible = true;
+      return;
+    }
+
+    if (this.skeletonMode === 'weights') {
+      // Paint the skin by dominant bone (region hues) — a debug readout of the
+      // analytic weights that will drive the skinning rig.
+      bones.visible = false;
+      if (internals) {
+        internals.breathRoot.visible = true;
+        internals.openEyes.visible = false;
+        this.paintWeights();
+      }
       return;
     }
 
@@ -407,6 +423,53 @@ export class KittenViewer {
       skinMat.depthWrite = false;
       skinMat.needsUpdate = true;
     }
+  }
+
+  /** Swap the skin to the bone-weight debug palette (idempotent per geometry). */
+  private paintWeights(): void {
+    const internals = this.internals;
+    if (!internals) return;
+    const mesh = internals.skinMesh;
+    const geometry = mesh.geometry;
+    const store = geometry.userData as {
+      originalColors?: Float32Array;
+      originalMaterial?: THREE.Material | THREE.Material[];
+    };
+    const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!colorAttr) return;
+    if (!store.originalColors) {
+      store.originalColors = new Float32Array(colorAttr.array as Float32Array);
+      store.originalMaterial = mesh.material;
+      const sw = computeSkinWeights(geometry.getAttribute('position') as THREE.BufferAttribute);
+      paintBoneWeightColors(colorAttr.array as Float32Array, sw);
+      colorAttr.needsUpdate = true;
+    }
+    if (!this.weightsMaterial) {
+      this.weightsMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+    }
+    if (mesh.material !== this.weightsMaterial) mesh.material = this.weightsMaterial;
+  }
+
+  private restoreWeights(): void {
+    const internals = this.internals;
+    if (!internals) return;
+    const mesh = internals.skinMesh;
+    const geometry = mesh.geometry;
+    const store = geometry.userData as {
+      originalColors?: Float32Array;
+      originalMaterial?: THREE.Material | THREE.Material[];
+    };
+    const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (store.originalColors && colorAttr) {
+      (colorAttr.array as Float32Array).set(store.originalColors);
+      colorAttr.needsUpdate = true;
+      delete store.originalColors;
+    }
+    if (store.originalMaterial) {
+      mesh.material = store.originalMaterial;
+      delete store.originalMaterial;
+    }
+    internals.openEyes.visible = true;
   }
 
   private requestRebuild(): void {

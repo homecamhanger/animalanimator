@@ -14,7 +14,7 @@ import {
   type AnatomyRegion,
 } from '../animal/anatomy';
 
-export type SkeletonMode = 'off' | 'overlay' | 'bones-only';
+export type SkeletonMode = 'off' | 'overlay' | 'bones-only' | 'weights';
 
 export const REGION_COLORS: Record<AnatomyRegion, number> = {
   skull: 0xf2e9d4,

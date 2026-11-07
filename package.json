@@ -11,7 +11,8 @@
     "check:profiles": "tsx scripts/check-profiles.ts",
     "check:builds": "tsx scripts/smoke-build.ts",
     "check:anatomy": "tsx scripts/check-anatomy.ts",
-    "check": "npm run check:profiles && npm run check:builds && npm run check:anatomy"
+    "check:weights": "tsx scripts/check-weights.ts",
+    "check": "npm run check:profiles && npm run check:builds && npm run check:anatomy && npm run check:weights"
   },
   "dependencies": {
     "three": "^0.171.0"
