@@ -39,12 +39,6 @@ export interface FieldBall {
   flow: number;
   /** True for negative-strength balls that CARVE the field (eye sockets, pinna scoops). */
   dent?: boolean;
-  /**
-   * Merge-group tag. Balls in the SAME group fuse into one shell; balls in
-   * different groups always render as separate shells (limbs never weld to
-   * each other or the torso). Defaults to 'core'.
-   */
-  mergeGroup?: string;
 }
 
 export interface SkeletonAnchors {
@@ -306,7 +300,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   // The hip JOINT attaches close to the midline — a cat's pelvis is only
   // ~6 cm across, so the femur heads ride nearly on the spine while the
   // haunch mass spreads laterally around them.
-  const hipJointX = clamp(hipX * 0.5, 0.062, 0.155);
+  const hipJointX = clamp(hipX * 0.34, 0.048, 0.13);
   const frontZ = mz(0.4);
   const bellyBottomFront = (() => {
     // approximate underside of the chest row at the foreleg z
@@ -314,7 +308,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     return groundY(chestRow.ry) - chestRow.rowRadius;
   })();
 
-  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number; flow: [number, number]; tag: string; color?: BallColor; mergeGroup: string }> = [];
+  const legSegments: Array<{ x: number; from: THREE.Vector3; to: THREE.Vector3; r1: number; r2: number; flow: [number, number]; tag: string; color?: BallColor }> = [];
 
   // Every leg is a TWO-BONE chain — upper bone and lower bone — solved with a
   // knee offset from the bisector in the y-z plane. Cat anatomy: front elbows
@@ -382,8 +376,8 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       ];
       let prevFront = frontOrigin;
       for (const seg of frontChain) {
-        legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}`, color: seg.color, mergeGroup: `limb_front_${side}` });
-        legSegments.push({ x: frontX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `front_${side}_joint`, mergeGroup: `limb_front_${side}` });
+        legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}`, color: seg.color });
+        legSegments.push({ x: frontX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `front_${side}_joint` });
         prevFront = seg.to;
       }
       // Hindquarter: the femur attaches at almost the complete rear of the
@@ -420,8 +414,8 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       ];
       let prevJoint = hindOrigin;
       for (const seg of chain) {
-        legSegments.push({ x: side * hipJointX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}`, color: seg.color, mergeGroup: `limb_hind_${side}` });
-        legSegments.push({ x: side * hipJointX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint`, mergeGroup: `limb_hind_${side}` });
+        legSegments.push({ x: side * hipJointX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}`, color: seg.color });
+        legSegments.push({ x: side * hipJointX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
         prevJoint = seg.to;
       }
       // Haunch muscle ball (the round thigh cats sit on) — every pose.
@@ -440,7 +434,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     const length = dir.length();
     if (length < 1e-4) {
       // Knee cap ball — a single sphere, no chain needed.
-      bones.push({ name: seg.tag, pos: seg.from.clone(), radius: seg.r1, color: 'fur', flow: seg.flow[0], mergeGroup: seg.mergeGroup });
+      bones.push({ name: seg.tag, pos: seg.from.clone(), radius: seg.r1, color: 'fur', flow: seg.flow[0] });
       continue;
     }
     const meanR = (seg.r1 + seg.r2) / 2;
@@ -453,7 +447,6 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
         pos: seg.from.clone().lerp(seg.to, t),
         radius,
         color: seg.color ?? 'fur',
-        mergeGroup: seg.mergeGroup,
         flow: seg.flow[0] + (seg.flow[1] - seg.flow[0]) * t,
       });
     }
