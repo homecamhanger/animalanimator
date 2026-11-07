@@ -1,19 +1,24 @@
 /**
- * fur.ts — builds the one continuous skin mesh from the skeleton's field balls.
+ * fur.ts — builds the cat's skin from the skeleton's field balls.
  *
  * Pipeline:
- *   1. MarchingCubes ingests the balls (reused instance, reset per rebuild).
- *   2. The used vertex range is copied into a compact BufferGeometry.
- *   3. Palette colours are re-normalised per vertex (exact field-weighted mean).
- *   4. Per-vertex tint pass: dark spine saddle, calico blotches, stripe mask
- *      (aStripe attribute — belly/socks/muzzle excluded).
+ *   1. Balls are partitioned into MERGE GROUPS (ball.mergeGroup, default
+ *      'core'). Balls in one group fuse into one marching-cubes shell;
+ *      balls in different groups NEVER weld — limbs keep their own skin,
+ *      piercing the torso shell with a natural crease instead of fusing
+ *      into one balloon.
+ *   2. Each group is polygonised into a compact BufferGeometry (palette
+ *      colours re-normalised per vertex against the group's own balls).
+ *   3. The shells are merged into ONE BufferGeometry / mesh — the cat is
+ *      one opaque animal visually, with separate skin where it counts.
+ *   4. Per-vertex tint pass on the merged geometry: dark spine saddle,
+ *      calico blotches, stripe mask (belly/socks/muzzle excluded).
  *   5. Fragment shader: wavy mackerel bands + guard-hair speckle, no textures.
- *
- * One mesh. No seams. The cat is one animal.
  */
 
 import * as THREE from 'three';
 import { MarchingCubes } from 'three/examples/jsm/objects/MarchingCubes.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mulberry32, seedFromString, type CoatSpec } from './coats';
 import type { FieldBall } from './skeleton';
 
@@ -80,10 +85,28 @@ export interface BuiltSkin {
   triangles: number;
 }
 
+/** Partition balls into merge groups; 'core' (the default) goes first. */
+function partitionGroups(balls: FieldBall[]): Map<string, FieldBall[]> {
+  const groups = new Map<string, FieldBall[]>();
+  for (const ball of balls) {
+    const key = ball.mergeGroup ?? 'core';
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(ball);
+    else groups.set(key, [ball]);
+  }
+  const core = groups.get('core');
+  if (core) {
+    groups.delete('core');
+    return new Map<string, FieldBall[]>([['core', core], ...groups]);
+  }
+  return groups;
+}
+
 /**
- * Polygonise the balls into a compact, coloured, smooth-normal skin geometry.
+ * Polygonise the given balls into one compact, coloured, smooth-normal
+ * shell. Called once per merge group.
  */
-export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin {
+function buildShell(balls: FieldBall[], spec: CoatSpec): BuiltSkin {
   const mc = getMarchingCubes();
   mc.reset();
 
@@ -158,11 +181,43 @@ export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin
   }
 
   normalizePaletteColors(geometry, balls, spec);
+  return { geometry, triangles: count / 3 };
+}
+
+export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin {
+  const groups = partitionGroups(balls);
+  const shells: BuiltSkin[] = [];
+  for (const groupBalls of groups.values()) {
+    if (groupBalls.length === 0) continue;
+    shells.push(buildShell(groupBalls, spec));
+  }
+  let geometry: THREE.BufferGeometry;
+  let triangles = 0;
+  for (const shell of shells) triangles += shell.triangles;
+  if (shells.length === 1) {
+    geometry = shells[0].geometry;
+  } else {
+    const merged = mergeGeometries(
+      shells.map((shell) => shell.geometry),
+      false,
+    );
+    if (merged) {
+      geometry = merged;
+    } else {
+      // Attribute mismatch should be impossible (all shells carry the same
+      // attributes) — but never ship a broken cat: retry as one field.
+      triangles = 0;
+      const fallback = buildShell(balls, spec);
+      geometry = fallback.geometry;
+      triangles = fallback.triangles;
+    }
+  }
+
   paintFacets(geometry, spec);
 
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
-  return { geometry, triangles: count / 3 };
+  return { geometry, triangles };
 }
 
 /** Exact per-vertex re-normalisation of the accumulated palette weights. */
