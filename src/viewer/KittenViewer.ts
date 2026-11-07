@@ -445,7 +445,9 @@ export class KittenViewer {
     const internals = this.internals;
     if (internals) {
       const breath = Math.sin(elapsed * 1.35) * gain;
-      internals.skinMesh.scale.set(1 + breath * 0.010, 1 + breath * 0.016, 1 + breath * 0.010);
+      // Whole assembly breathes (skin + eyes + lids + whiskers + nose …),
+      // pivoted at the floor contact plane so features never drift on the fur.
+      internals.breathRoot.scale.set(1 + breath * 0.010, 1 + breath * 0.016, 1 + breath * 0.010);
 
       // Blinking — the eyelid sweeps over the cornea; the eyeball never moves.
       const setLid = (value: number) => {

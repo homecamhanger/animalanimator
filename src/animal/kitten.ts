@@ -87,6 +87,9 @@ function furMaterial(id: CoatId): THREE.MeshStandardMaterial {
 export interface KittenInternals {
   skinMesh: THREE.Mesh;
   openEyes: THREE.Group;
+  /** Common parent of skin and every accessory — idle motion scales this so
+   *  features never detach from the fur as it swells. */
+  breathRoot: THREE.Group;
 }
 
 export function buildKitten(options: KittenOptions): KittenBuild {
@@ -266,7 +269,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   }
 
   const builtMs = performance.now() - started;
-  const internals: KittenInternals = { skinMesh, openEyes };
+  const internals: KittenInternals = { skinMesh, openEyes, breathRoot: bodyGroup };
   root.userData.internals = internals;
 
   return {
