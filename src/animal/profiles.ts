@@ -118,7 +118,7 @@ export const POSE_PARAMS: Record<PoseId, PoseParams> = {
     scaleX: 1,
     scaleY: 1,
     scaleZ: 1,
-    floorY: 0.335,
+    floorY: 0.45,
     headPitch: 0,
     headYaw: 0,
     headDrop: 0,

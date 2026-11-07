@@ -357,7 +357,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       // angle, and the metatarsus folds back the other way so it runs nearly
       // parallel to the femur — the classic digitigrade Z.
       const hipRow = rowData[1];
-      const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.4);
+      const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.52);
       const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.44));
       const chain = (() => {
         if (poseId === 'sitting') {
@@ -379,15 +379,33 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
             { to: new THREE.Vector3(side * hipX * 0.84, 0.03, mz(0.115)), r1: 0.042 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
           ];
         }
-        // Standing / stretch / play bow: femur from the very rear of the
-        // body down-forward; tibia at a near-right angle (down-back);
-        // metatarsus folded the other way, near-parallel to the femur.
-        const stifleY = Math.max(0.15, haunchY - 0.1);
+        // Standing: long-legged digitigrade stance. Femur from the very
+        // rear of the body down-forward; a MUCH longer tibia folds back
+        // (near right angle); metatarsus folds the other way, parallel to
+        // the femur; toes forward flat. Femur and toe lengths are solved
+        // from the actual hip anchor so the foot plants at y=0.028,
+        // z≈-0.075 at ANY weight; the tibia is substantially lengthened.
+        const fSin = Math.sin(0.505); // ~29° below horizontal — steep femur keeps the stifle back
+        const fCos = Math.cos(0.505);
+        const femurDir = new THREE.Vector3(0, -fSin, fCos);
+        const tibiaDir = new THREE.Vector3(0, -fCos, -fSin); // exact perpendicular, down-back
+        const phalDir = new THREE.Vector3(0, -0.27, 0.963); // toes forward, flat
+        const LT = 0.27; // tibia — substantially lengthened
+        const LP = 0.058; // toe — unchanged
+        // Solve the femur+cannon span from the hip anchor so the foot lands
+        // on the floor (y=0.028) at any weight; femur:cannon = 72:28.
+        const Q = Math.max(0.34, (haunchY - 0.028 - 0.858 * LT - 0.27 * LP) / fSin);
+        const LF = Q * 0.72;
+        const LM = Q * 0.28;
+        const stifle = hip.clone().addScaledVector(femurDir, LF);
+        const hock = stifle.clone().addScaledVector(tibiaDir, LT);
+        const mtp = hock.clone().addScaledVector(femurDir, LM);
+        const toe = mtp.clone().addScaledVector(phalDir, LP);
         return [
-          { to: new THREE.Vector3(side * hipX * 0.97, stifleY, mz(-0.155)), r1: 0.118 * legMul * morph.haunchSpread, r2: 0.07 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-          { to: new THREE.Vector3(side * hipX * 0.88, 0.095, mz(-0.22)), r1: 0.062 * legMul, r2: 0.049 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-          { to: new THREE.Vector3(side * hipX * 0.82, 0.042, mz(-0.125)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-          { to: new THREE.Vector3(side * hipX * 0.78, 0.028, mz(-0.075)), r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+          { to: stifle, r1: 0.125 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+          { to: hock, r1: 0.068 * legMul, r2: 0.05 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+          { to: mtp, r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+          { to: toe, r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
         ];
       })();
       let prevJoint = hip;
