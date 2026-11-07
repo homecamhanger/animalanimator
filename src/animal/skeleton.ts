@@ -20,6 +20,7 @@ import {
   type PoseId,
 } from './profiles';
 import { mergeLegTuning, type LegTuning } from './tuning';
+import { sdPrimitive, sminPoly } from './fur';
 
 /** Colour roles; resolved to actual shades by the coat at build time. */
 export type BallColor =
@@ -465,7 +466,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       }
       // Haunch muscle ball (the round thigh cats sit on) — every pose.
       const thighPos = haunchMass.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02));
-      addSphere(`thigh_${side}`, thighPos.x, thighPos.y, thighPos.z, 0.112 * legMul * morph.haunchSpread * pose.scaleY, 'fur', 1.28, 0.065);
+      addSphere(`thigh_${side}`, thighPos.x, thighPos.y - 0.018, thighPos.z, 0.094 * legMul * morph.haunchSpread * pose.scaleY, 'fur', 1.28, 0.055);
     }
   }
 
@@ -473,7 +474,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   // joints, so chains stay slim shafts instead of fusing into a blob.
   const LEG_BLEND: Record<string, number> = {
     upper: 0.062, lowerA: 0.04, lowerB: 0.034,
-    femur: 0.05, tibia: 0.042, metatarsus: 0.034, metatarsusB: 0.034, phalanx: 0.032,
+    femur: 0.022, tibia: 0.042, metatarsus: 0.034, metatarsusB: 0.034, phalanx: 0.032,
   };
   for (const seg of legSegments) {
     const dir = seg.to.clone().sub(seg.from);
@@ -535,6 +536,47 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   }
   const tailTip = tailCurve.getPointAt(1);
   addSphere('tail_tip', tailTip.x, tailTip.y, tailTip.z, tailRadius(1) * 0.96, 'saddle', 2.9, 0.04);
+
+  /* ----------------- Stifle crotch dimple (auto-placed) ----------------- */
+  // One compact anti-ball per side, dropped at the deepest "throat" along the
+  // out-and-up ray from the femur — the corner where the belly wall meets the
+  // leg. Carving exactly one focused dish (eye-socket style) separates the
+  // knee from the abdomen in the silhouette without slicing the folded limb
+  // mass in poses where it legitimately melts into the body (sitting/loaf/
+  // curled). The proximal femur stays fused to the hip by construction.
+  if (poseId === 'standing') {
+    const baseField = (p: THREE.Vector3): number => {
+      let acc = 1e3;
+      for (const prim of bones) {
+        if (prim.dent) continue;
+        acc = sminPoly(acc, sdPrimitive(p.x, p.y, p.z, prim), prim.blend);
+      }
+      return acc;
+    };
+    const placeCrotch = (side: 1 | -1): void => {
+      const femur = bones.find(b => b.name === `leg_hind_${side}_femur`);
+      if (!femur) return;
+      const dir = new THREE.Vector3(side * 0.72, 0.7, 0).normalize();
+      const t = 0.7; // throat station — the deepest point of the belly/leg neck
+      const axis = femur.a.clone().lerp(femur.b, t);
+      let hit = -1;
+      let prevF = baseField(axis), prevD = 0;
+      for (let d = 0.008; d <= 0.34; d += 0.008) {
+        const f = baseField(axis.clone().addScaledVector(dir, d));
+        if (f >= 0) {
+          hit = prevD + ((0 - prevF) * (d - prevD)) / (f - prevF);
+          break;
+        }
+        prevF = f; prevD = d;
+      }
+      if (hit >= 0) {
+        const p = axis.clone().addScaledVector(dir, hit);
+        addDent(`crotch_${side}`, p.x, p.y, p.z, 0.06, 0.018, 1.38);
+      }
+    };
+    placeCrotch(1);
+    placeCrotch(-1);
+  }
 
   /* ------------------------------ Anchors ------------------------------ */
 

@@ -248,6 +248,34 @@ The options, ranked by fit to this project:
 - Dewclaw/Mt1: keep them in the data like now, or drop from weights entirely?
 - Do you want the skinning **code** written now, or just this decision first?
 
+## Fur construction notes — leg/abdomen crease
+
+The hind limb melted into the abdomen: the thigh ran inside the belly mass
+and the union blend rounded the junction smooth, so the knee never read as
+its own landmark. Three changes, standing pose only where a true throat
+exists:
+
+- **Shape-first neck (all poses).** The haunch/thigh ball was slimmed
+  (0.112 → 0.094·legMul·haunchSpread·scaleY) and lowered 0.018, and the
+  femur cone's union blend was cut (0.05 → 0.022). The leg now necks where
+  it exits the belly instead of flaring straight out of it — no carving.
+- **One compact anti-ball (`crotch_*`), standing only.** Placed by marching
+  the out-and-up (45°) ray from the solved femur at t = 0.70 — the deepest
+  "throat" of the belly/leg neck — onto the actual union surface, one per
+  side, dent radius 0.060, blend 0.018. A baggy crease carves clean at the
+  80³ grid; thin fold lines would need a higher FIELD.resolution. Because it
+  rides the solved femur, all weight morphs of the standing pose inherit it.
+- **Gated to standing.** Folded poses (sitting/loaf/curled/stretch) have
+  no throat — the folded limb legitimately melts into the body drum, and
+  the same dish punches a terraced crater into the haunch there. The
+  play-bow (stretch) is untouched, and the proximal femur stays fused to
+  the hip in every pose.
+
+Verification: all five poses re-rendered; `npm run check` green; front
+legs still merge into the chest (acceptable — no complaint, left alone).
+Residual: the crease is a soft dish, not a razor fold line; sharper folds
+want FIELD.resolution ≥ 96 or a fold-aware blend, both deferred.
+
 ## Files
 
 - `src/animal/anatomy.ts` — the bone data + `buildAnatomy()`
@@ -255,6 +283,8 @@ The options, ranked by fit to this project:
 - `scripts/probe-skeleton.ts` — print the registered mesh landmarks
 - `scripts/dump-anatomy.ts` / `render-anatomy.py` — JSON dump + 2D preview
 - `scripts/render-overlay.py` — x-ray composite (fur ghost + bones)
+- `src/animal/skeleton.ts` — the solved rig + fur field primitives (incl. the stifle crotch dimple)
+- `src/animal/fur.ts` — 80³ SDF grid + marching cubes; exports `sdPrimitive`/`sminPoly` for solver-side probes
 - `src/animal/skinWeights.ts` — the analytic weight solver + region debug palette
 - `src/animal/skinning.ts` — DQS core (pivot deltas, dual quaternions, normal re-rotation)
 - `src/animal/skinRig.ts` — pose→bone deltas registered to the solved chains

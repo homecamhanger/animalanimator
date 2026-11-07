@@ -50,7 +50,7 @@ export const smaxPoly = (a: number, b: number, k: number): number => -sminPoly(-
 
 /** Exact SDF of a (possibly tapered) cone segment a→b with end radii r1→r2.
  *  Degenerates to a sphere when a == b. Negative inside. */
-function sdPrimitive(px: number, py: number, pz: number, prim: FieldPrimitive): number {
+export function sdPrimitive(px: number, py: number, pz: number, prim: FieldPrimitive): number {
   const ax = prim.a.x, ay = prim.a.y, az = prim.a.z;
   const abx = prim.b.x - ax, aby = prim.b.y - ay, abz = prim.b.z - az;
   const len2 = abx * abx + aby * aby + abz * abz;
