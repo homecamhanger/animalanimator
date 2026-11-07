@@ -59,15 +59,19 @@ const HIND_DEFAULTS: Record<PoseId, HindTuning> = {
     hockAngle: 90.0,
     toeAngle: 166.7,
   },
+  // Sitting cat: rump on the floor, femur near-horizontal forward, the stifle
+  // folds the shin DOWN AND BACK under the belly, then the metatarsus
+  // (the foot) flips FORWARD flat on the floor. A near-straight knee reads
+  // as a horse stretching a leg forward.
   sitting: {
-    femurLen: 0.373,
-    tibiaLen: 0.159,
-    metatarsusLen: 0.081,
-    toeLen: 0.1,
-    femurAngle: 7.7,
-    stifleAngle: 168.3,
-    hockAngle: 169.4,
-    toeAngle: 175.6,
+    femurLen: 0.34,
+    tibiaLen: 0.185,
+    metatarsusLen: 0.185,
+    toeLen: 0.07,
+    femurAngle: 10.0,
+    stifleAngle: 74.0,
+    hockAngle: 68.0,
+    toeAngle: 176.0,
   },
   stretch: {
     femurLen: 0.245,

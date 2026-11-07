@@ -36,17 +36,14 @@ const build = buildKitten({ weight, pose: poseArg as never, coat: 'orangeTabby' 
 if (process.argv[5] === 'lids-closed') {
   const internals = build.group.userData.internals as { openEyes: THREE.Group };
   for (const eye of internals.openEyes.children) {
-    const lid = eye.userData.lid as THREE.Mesh | undefined;
-    if (lid) lid.rotation.x = Number(process.env.LIDX ?? (lid.userData as { closed: number }).closed);
+    const squash = eye.userData.squash as THREE.Group | undefined;
+    if (squash) squash.scale.y = Number(process.env.LIDX ?? 0.07);
   }
 } else if (process.argv[5] === 'lids-half') {
   const internals = build.group.userData.internals as { openEyes: THREE.Group };
   for (const eye of internals.openEyes.children) {
-    const lid = eye.userData.lid as THREE.Mesh | undefined;
-    if (lid) {
-      const { open, closed } = lid.userData as { open: number; closed: number };
-      lid.rotation.x = open + (closed - open) * 0.55;
-    }
+    const squash = eye.userData.squash as THREE.Group | undefined;
+    if (squash) squash.scale.y = 1 - 0.55 * 0.93;
   }
 }
 build.group.updateMatrixWorld(true);

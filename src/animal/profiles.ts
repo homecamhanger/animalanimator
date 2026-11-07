@@ -44,7 +44,8 @@ export function weightMorph(weightInput: number): WeightMorph {
     bottomMul: 1 + c * 0.38,
     bellyDroop: Math.max(0, c) * 0.075,
     cheekMul: 1 + c * 0.55,
-    headMul: 1 + c * 0.13,
+    // The skull barely changes with weight — chonk cats grow jowls, not heads.
+    headMul: 1 + c * 0.04,
     legMul: 1 + c * 0.3,
     pawMul: 1 + c * 0.2,
     tailMul: 1 + c * 0.4,

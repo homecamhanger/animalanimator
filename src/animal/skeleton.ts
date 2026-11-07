@@ -44,6 +44,8 @@ export interface FieldBall {
 export interface SkeletonAnchors {
   headPos: THREE.Vector3;
   headMul: number;
+  /** Weight-driven jowl growth — used for the whisker fan reach. */
+  cheekMul: number;
   headBaseY: number;
   earDirs: Array<{ base: THREE.Vector3; dir: THREE.Vector3; side: 1 | -1 }>;
   tailTipWorld: THREE.Vector3;
@@ -162,7 +164,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
 
   const neckY = groundY(BASE_SPINE + spineOffset(1) + 0.075);
   const neckZ = mz(0.565);
-  bones.push({ name: 'neck_low', pos: new THREE.Vector3(0, neckY, neckZ), radius: 0.1 * radiusMul * pose.scaleY, color: 'fur', flow: 0.97 });
+  bones.push({ name: 'neck_low', pos: new THREE.Vector3(0, neckY, neckZ), radius: 0.095 * (1 + morph.chonk * 0.38) * pose.scaleY, color: 'fur', flow: 0.97 });
 
   const headZ = mz(0.565 + 0.075 + pose.headForward);
   const headBaseY = groundY(BASE_SPINE + spineOffset(1) + 0.27 - pose.headDrop * 0.55);
@@ -177,11 +179,11 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const local = (x: number, y: number, z: number): THREE.Vector3 =>
     new THREE.Vector3(x * headMul, y * headMul, z * headMul).applyQuaternion(headQuat).add(headCenter);
 
-  bones.push({ name: 'head_cranium', pos: headCenter.clone(), radius: 0.272 * headMul, color: 'fur', flow: 1.03 });
+  bones.push({ name: 'head_cranium', pos: headCenter.clone(), radius: 0.228 * headMul, color: 'fur', flow: 1.03 });
   bones.push({
     name: 'head_skull',
     pos: local(0, 0.055, -0.085),
-    radius: 0.214 * headMul,
+    radius: 0.184 * headMul,
     color: 'fur',
     flow: 1.06,
   });
@@ -190,7 +192,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     bones.push({
       name: `cheek_${side}`,
       pos: local(side * 0.124, -0.048, 0.075),
-      radius: 0.14 * morph.cheekMul * headMul,
+      radius: 0.122 * morph.cheekMul * headMul,
       color: 'fur',
       flow: 1.13,
     });
@@ -199,11 +201,11 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   bones.push({
     name: 'muzzle',
     pos: local(0, -0.118, 0.208),
-    radius: 0.13 * headMul,
+    radius: 0.118 * headMul,
     color: 'cream',
     flow: 1.17,
   });
-  const chinRadius = 0.088 * morph.chinMul;
+  const chinRadius = 0.082 * morph.chinMul;
   if (chinRadius > 0.028) {
     bones.push({
       name: 'chin',
@@ -268,7 +270,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     bones.push({
       name: `eye_socket_${side}`,
       pos: local(side * 0.135, 0.06, 0.235),
-      radius: 0.088 * headMul,
+      radius: 0.08 * headMul,
       color: 'fur',
       flow: 1.05,
       dent: true,
@@ -553,6 +555,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const anchors: SkeletonAnchors = {
     headPos: headCenter,
     headMul,
+    cheekMul: morph.cheekMul,
     headBaseY,
     earDirs,
     tailTipWorld: tailCurve.getPointAt(1),

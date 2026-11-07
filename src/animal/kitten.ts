@@ -135,7 +135,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   /* --------- Non-fur features, snapped onto the isosurface ----------- */
   // Every accessory is raymarched against the actual field so it sits on the
   // fur at ANY weight/pose — never swallowed by the isosurface, never floating.
-  const { headPos, headMul } = skeleton.anchors;
+  const { headPos, headMul, cheekMul } = skeleton.anchors;
   const headQuat = new THREE.Quaternion().setFromEuler(
     new THREE.Euler(pose.headPitch, pose.headYaw, 0, 'YXZ'),
   );
@@ -163,47 +163,53 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   const closedEyes = new THREE.Group();
   closedEyes.name = 'closedEyes';
   const eyeMaterialFor = eyeMaterial(options.coat);
-  // Eyelid — a fur-coloured spherical cap that sweeps over the eye to close
-  // it. Blinking animates rotation.x (open ≈ flipped up over the brow → closed
-  // ≈ swept down across the cornea). The eyeball itself never transforms.
-  const lidOpen = -1.32;          // cap flipped back over the brow — fully hidden
-  const lidClosed = Math.PI / 2;  // cap pole straight out of the face — full cover
-  const lidGeometry = new THREE.SphereGeometry(0.077, 18, 12, 0, Math.PI * 2, 0, 2.05);
-  const lidMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(spec.base), roughness: 0.95 });
+  // No separate eyelid objects — a cat's eyelid is a monolid fold. The blink
+  // is a top-down wipe: an inner "squash" group pivots at the eye's lower
+  // rim, so scaling its Y collapses the eye (and pupil, and glint) onto that
+  // rim line — the upper lid sweeping down, as one motion. The eyeball
+  // itself never translates out through the skull.
+  const EYE_PIVOT = 0.055; // just inside the lower rim of the eyeball
   for (const side of [-1, 1]) {
-    const { point, dir } = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, -0.016);
+    // Snap onto the SOCKETLESS skull surface — the carved socket dish wraps
+    // the eyeball like a rim, instead of the eyeball sinking into the dish
+    // bottom (which read as "eyes set too far back").
+    const { point, dir } = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, -0.008, true);
     const eyeGroup = new THREE.Group();
     eyeGroup.position.copy(point);
     eyeGroup.quaternion.copy(faceQuat(dir));
 
+    // Everything shifts up by the pivot offset; squashing collapses to the
+    // lower rim.
+    const squash = new THREE.Group();
+    squash.position.y = -EYE_PIVOT;
+    eyeGroup.add(squash);
+    const lift = (obj: THREE.Object3D): void => {
+      obj.position.y += EYE_PIVOT;
+      squash.add(obj);
+    };
+
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.052, 20, 16), eyeMaterialFor);
     eye.scale.set(0.92, 1.18, 0.55);
-    eyeGroup.add(eye);
+    lift(eye);
 
     const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.0295, 12, 10), sharedMats.pupil);
     pupil.scale.set(0.52, 1.05, 0.52);
     pupil.position.set(0, 0.002, 0.0282);
-    eyeGroup.add(pupil);
+    lift(pupil);
 
     const glint = new THREE.Mesh(new THREE.SphereGeometry(0.0125, 8, 8), sharedMats.glint);
     glint.position.set(-0.016, 0.022, 0.044);
-    eyeGroup.add(glint);
+    lift(glint);
 
-    const lid = new THREE.Mesh(lidGeometry, lidMaterial);
-    lid.rotation.x = lidOpen;
-    lid.userData.open = lidOpen;
-    lid.userData.closed = lidClosed;
-    eyeGroup.add(lid);
     mark(eye);
-    mark(lid);
-    eyeGroup.userData.lid = lid;
+    eyeGroup.userData.squash = squash;
     openEyes.add(eyeGroup);
 
     const arc = new THREE.Mesh(
       new THREE.TorusGeometry(0.051, 0.011, 8, 20, Math.PI),
       sharedMats.closedEye,
     );
-    const arcSnap = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, 0.008);
+    const arcSnap = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, 0.004, true);
     arc.position.copy(arcSnap.point);
     arc.quaternion.copy(faceQuat(arcSnap.dir));
     closedEyes.add(arc);
@@ -251,8 +257,8 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   }
 
   // Whiskers — bases locked to the muzzle/cheek surface; reach extends with
-  // cheek growth so they never vanish into a big-cheeked face.
-  const whiskerReach = 1 + (headMul - 1) * 2.4;
+  // jowl growth so they never vanish into a big-cheeked face.
+  const whiskerReach = 1 + (cheekMul - 1) * 0.75;
   for (const side of [-1, 1]) {
     for (let k = -1; k <= 1; k++) {
       const snapDir = headDir(side * 0.72, -0.34 + k * 0.1, 0.66);

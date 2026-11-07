@@ -453,17 +453,17 @@ export class KittenViewer {
     const internals = this.internals;
     if (internals) {
       const breath = Math.sin(elapsed * 1.35) * gain;
-      // Whole assembly breathes (skin + eyes + lids + whiskers + nose …),
+      // Whole assembly breathes (skin + eyes + whiskers + nose …),
       // pivoted at the floor contact plane so features never drift on the fur.
       internals.breathRoot.scale.set(1 + breath * 0.010, 1 + breath * 0.016, 1 + breath * 0.010);
 
-      // Blinking — the eyelid sweeps over the cornea; the eyeball never moves.
+      // Blinking — a monolid wipe: scaling the squash group collapses the eye
+      // onto its lower rim, top-down. The eyeball never translates.
       const setLid = (value: number) => {
         for (const eye of internals.openEyes.children) {
-          const lid = eye.userData.lid as THREE.Mesh | undefined;
-          if (!lid) continue;
-          const { open, closed } = lid.userData as { open: number; closed: number };
-          lid.rotation.x = open + (closed - open) * value;
+          const squash = eye.userData.squash as THREE.Group | undefined;
+          if (!squash) continue;
+          squash.scale.y = 1 - value * 0.93; // 1 → 0.07 (a closed-eye line)
         }
       };
       if (internals.openEyes.visible) {
