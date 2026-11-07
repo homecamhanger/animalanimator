@@ -329,8 +329,11 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     return knee;
   };
 
-  if (pose.legsVisible) {
-    for (const side of [-1, 1]) {
+  // Legs exist in EVERY pose — loaf/curled fold them under the body instead
+  // of deleting them, so the haunches keep their volume.
+  const hindToeZ = !pose.legsVisible ? Number.POSITIVE_INFINITY : poseId === 'sitting' ? mz(0.26) : mz(-0.075);
+  for (const side of [-1, 1]) {
+    {
       const frontX = side * shoulderX;
       if (pose.frontLegAngle > 0.05) {
         // Play bow: forelegs reach forward; a soft forward elbow.
@@ -344,48 +347,56 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
         );
         twoBone(shoulder, tip, 0.05, 0.1 * legMul, 0.074 * legMul, 0.058 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
       } else {
-        // Standing / sitting: straight-ish column, elbow tucked slightly back.
+        // Standing / sitting / tucked: straight-ish column, elbow tucked slightly back.
         const shoulder = new THREE.Vector3(frontX, bellyBottomFront + 0.14, frontZ);
         const ankle = new THREE.Vector3(frontX, 0.065, frontZ + 0.012);
         twoBone(shoulder, ankle, -0.035, 0.1 * legMul, 0.073 * legMul, 0.057 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
       }
-      // Hindquarter: thigh ball at the hip, then a FOUR-bone chain —
-      // femur (hip→stifle), tibia (stifle→HOCK, the ankle), metatarsus
-      // (hock→MTP, the metatarsophalangeal joint), phalanges (MTP→toe tip).
+      // Hindquarter: the femur attaches at almost the complete rear of the
+      // body (not counting the tail base), the tibia folds at a near-right
+      // angle, and the metatarsus folds back the other way so it runs nearly
+      // parallel to the femur — the classic digitigrade Z.
       const hipRow = rowData[1];
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.4);
-      const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.27));
-      if (poseId === 'sitting') {
-        // Sitting fold as a four-bone chain, shin and foot lying along the floor.
-        const sitting = [
-          { to: new THREE.Vector3(side * hipX * 1.02, Math.max(0.09, hip.y - 0.03), mz(-0.05)), r1: 0.095 * legMul, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-          { to: new THREE.Vector3(side * hipX * 0.97, 0.045, mz(0.1)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-          { to: new THREE.Vector3(side * hipX * 0.95, 0.034, mz(0.17)), r1: 0.045 * legMul, r2: 0.042 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-          { to: new THREE.Vector3(side * hipX * 0.92, 0.028, mz(0.27)), r1: 0.043 * legMul, r2: 0.047 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
-        ];
-        let prevSit = hip;
-        for (const seg of sitting) {
-          legSegments.push({ x: side * hipX, from: prevSit, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
-          legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.08, r2: seg.r2 * 1.08, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
-          prevSit = seg.to;
+      const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.44));
+      const chain = (() => {
+        if (poseId === 'sitting') {
+          // Seated fold; shin and foot lie along the floor under the belly.
+          return [
+            { to: new THREE.Vector3(side * hipX * 1.02, Math.max(0.095, haunchY - 0.17), mz(-0.07)), r1: 0.095 * legMul, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+            { to: new THREE.Vector3(side * hipX * 0.97, 0.045, mz(0.08)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+            { to: new THREE.Vector3(side * hipX * 0.95, 0.034, mz(0.16)), r1: 0.045 * legMul, r2: 0.042 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+            { to: new THREE.Vector3(side * hipX * 0.92, 0.028, mz(0.26)), r1: 0.043 * legMul, r2: 0.047 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+          ];
         }
-      } else {
-        // Standing: stifle kicks forward, hock tucks back, metatarsus and
-        // toes step forward — the paw plants well behind the belly line.
-        const chain = [
-          { to: new THREE.Vector3(side * hipX * 0.97, 0.19, mz(-0.15)), r1: 0.118 * legMul * morph.haunchSpread, r2: 0.07 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-          { to: new THREE.Vector3(side * hipX * 0.86, 0.095, mz(-0.2)), r1: 0.062 * legMul, r2: 0.049 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-          { to: new THREE.Vector3(side * hipX * 0.8, 0.038, mz(-0.15)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-          { to: new THREE.Vector3(side * hipX * 0.76, 0.028, mz(-0.095)), r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
-        ];
-        let prevStand = hip;
-        for (const seg of chain) {
-          legSegments.push({ x: side * hipX, from: prevStand, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
-          legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
-          prevStand = seg.to;
+        if (!pose.legsVisible) {
+          // Loaf / curled: folded under the belly — thigh diagonal to the
+          // stifle, shin kicked back, metatarsus lying flat forward.
+          return [
+            { to: new THREE.Vector3(side * hipX * 0.98, 0.085, mz(-0.06)), r1: 0.115 * legMul * morph.haunchSpread, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+            { to: new THREE.Vector3(side * hipX * 0.92, 0.055, mz(-0.16)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+            { to: new THREE.Vector3(side * hipX * 0.88, 0.045, mz(0.02)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+            { to: new THREE.Vector3(side * hipX * 0.84, 0.03, mz(0.115)), r1: 0.042 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+          ];
         }
+        // Standing / stretch / play bow: femur from the very rear of the
+        // body down-forward; tibia at a near-right angle (down-back);
+        // metatarsus folded the other way, near-parallel to the femur.
+        const stifleY = Math.max(0.15, haunchY - 0.1);
+        return [
+          { to: new THREE.Vector3(side * hipX * 0.97, stifleY, mz(-0.155)), r1: 0.118 * legMul * morph.haunchSpread, r2: 0.07 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+          { to: new THREE.Vector3(side * hipX * 0.88, 0.095, mz(-0.22)), r1: 0.062 * legMul, r2: 0.049 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+          { to: new THREE.Vector3(side * hipX * 0.82, 0.042, mz(-0.125)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+          { to: new THREE.Vector3(side * hipX * 0.78, 0.028, mz(-0.075)), r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+        ];
+      })();
+      let prevJoint = hip;
+      for (const seg of chain) {
+        legSegments.push({ x: side * hipX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
+        legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
+        prevJoint = seg.to;
       }
-      // Haunch muscle ball (the round thigh cats sit on).
+      // Haunch muscle ball (the round thigh cats sit on) — every pose.
       bones.push({
         name: `thigh_${side}`,
         pos: hip.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
@@ -433,7 +444,9 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       } else {
         pawBalls.push({ x, z: frontZ + 0.035 });
       }
-      pawBalls.push({ x: side * hipX * (poseId === 'sitting' ? 0.92 : 0.76), z: mz(poseId === 'sitting' ? 0.29 : -0.095) });
+      if (Number.isFinite(hindToeZ)) {
+        pawBalls.push({ x: side * hipX * 0.79, z: hindToeZ });
+      }
     }
   } else {
     // Loaf / curled: just the white tips peeking out from under the chest.
