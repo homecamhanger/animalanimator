@@ -300,7 +300,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   // The hip JOINT attaches close to the midline — a cat's pelvis is only
   // ~6 cm across, so the femur heads ride nearly on the spine while the
   // haunch mass spreads laterally around them.
-  const hipJointX = clamp(hipX * 0.34, 0.048, 0.13);
+  const hipJointX = clamp(hipX * 0.5, 0.062, 0.155);
   const frontZ = mz(0.4);
   const bellyBottomFront = (() => {
     // approximate underside of the chest row at the foreleg z
@@ -451,6 +451,33 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       });
     }
   }
+
+  /* -------------------- Crotch creases ---------------------------
+   * One continuous skin everywhere — but the limbs must not read as one
+   * balloon. Negative-strength anti-balls on the midline under the belly
+   * and under the chest carve a fur crease between the inner thighs and
+   * between the forearms. The isosurface recedes into a valley there;
+   * the shell is never broken, no seam is ever created. */
+  const addCrease = (z: number, y: number, r: number): void => {
+    bones.push({
+      name: 'crease',
+      pos: new THREE.Vector3(0, y, z),
+      radius: r,
+      color: 'fur',
+      flow: 1.0,
+      dent: true,
+    });
+  };
+  // Overlapping grid → one smooth valley, not a row of beads.
+  const creaseWall = (zMin: number, zMax: number, yMin: number, yMax: number, step: number, r: number): void => {
+    for (let z = zMin; z <= zMax + 1e-4; z += step) {
+      for (let y = yMin; y <= yMax + 1e-4; y += step) {
+        addCrease(z, y, r);
+      }
+    }
+  };
+  creaseWall(mz(-0.4), mz(0.08), 0.045, 0.2, 0.055, 0.062);
+  creaseWall(mz(0.26), mz(0.44), 0.045, 0.2, 0.055, 0.058);
 
   /* ------------------------------ Tail --------------------------------- */
 
