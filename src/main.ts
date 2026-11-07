@@ -323,6 +323,26 @@ function setCoat(coatId: CoatId): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Anatomy — skeleton overlay                                          */
+/* ------------------------------------------------------------------ */
+
+const anatomyRow = $<HTMLDivElement>('#anatomy-row');
+const anatomyButtons = new Map<string, HTMLButtonElement>();
+anatomyRow.querySelectorAll<HTMLButtonElement>('[data-anatomy]').forEach((button) => {
+  anatomyButtons.set(button.dataset.anatomy ?? 'off', button);
+  button.addEventListener('click', () => setSkeletonMode(button.dataset.anatomy ?? 'off'));
+});
+
+function setSkeletonMode(mode: string): void {
+  viewer.setSkeletonMode(mode as 'off' | 'overlay' | 'bones-only');
+  for (const [id, button] of anatomyButtons) {
+    const active = id === mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Backdrop picker                                                     */
 /* ------------------------------------------------------------------ */
 

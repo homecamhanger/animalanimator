@@ -12,6 +12,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { POSE_ORDER, POSE_PARAMS, type PoseId } from '../animal/profiles';
 import type { KittenBuild, KittenMetrics, KittenInternals } from '../animal/kitten';
+import { buildSkeletonGroup, type SkeletonMode } from './skeletonScene';
 import type { AnimalSpec } from '../animal/registry';
 import type { LegTuning } from '../animal/tuning';
 import { backdropById, paintBackdrop, type BackdropId } from './backdrop';
@@ -60,6 +61,9 @@ export class KittenViewer {
 
   private current: KittenBuild | null = null;
   private internals: KittenInternals | null = null;
+  private skeletonGroup: THREE.Group | null = null;
+  private skeletonMode: SkeletonMode = 'off';
+  private furFade: { transparent: boolean; opacity: number; depthWrite: boolean } | null = null;
   private rebuildQueued = false;
   private idleMotion = true;
   private breathGain = 1;
@@ -207,6 +211,16 @@ export class KittenViewer {
     this.idleMotion = enabled;
   }
 
+  /** Fur only / translucent fur + bones / skeleton only. */
+  setSkeletonMode(mode: SkeletonMode): void {
+    this.skeletonMode = mode;
+    this.applySkeletonMode();
+  }
+
+  getSkeletonMode(): SkeletonMode {
+    return this.skeletonMode;
+  }
+
   setView(preset: ViewPreset): void {
     const next = VIEW_PRESETS[preset];
     this.cameraTween = {
@@ -349,6 +363,52 @@ export class KittenViewer {
     this.camera.updateProjectionMatrix();
   }
 
+  private applySkeletonMode(): void {
+    // Lazily create the skeleton once; it is static (standing rest pose) and lives in the mesh's frame.
+    if (!this.skeletonGroup) {
+      this.skeletonGroup = buildSkeletonGroup();
+      this.skeletonGroup.visible = false;
+      this.scene.add(this.skeletonGroup);
+    }
+    const bones = this.skeletonGroup;
+    const internals = this.internals;
+    const skinMat = internals?.skinMesh.material as THREE.MeshStandardMaterial | undefined;
+
+    const restoreFur = (): void => {
+      if (skinMat && this.furFade) {
+        skinMat.transparent = this.furFade.transparent;
+        skinMat.opacity = this.furFade.opacity;
+        skinMat.depthWrite = this.furFade.depthWrite;
+        skinMat.needsUpdate = true;
+        this.furFade = null;
+      }
+    };
+
+    restoreFur();
+
+    if (this.skeletonMode === 'off') {
+      bones.visible = false;
+      if (internals) internals.breathRoot.visible = true;
+      return;
+    }
+
+    bones.visible = true;
+    if (this.skeletonMode === 'bones-only') {
+      if (internals) internals.breathRoot.visible = false;
+      return;
+    }
+
+    // overlay: fur stays, ghosted so the bones read through.
+    if (internals) internals.breathRoot.visible = true;
+    if (skinMat) {
+      this.furFade = { transparent: skinMat.transparent, opacity: skinMat.opacity, depthWrite: skinMat.depthWrite };
+      skinMat.transparent = true;
+      skinMat.opacity = 0.16;
+      skinMat.depthWrite = false;
+      skinMat.needsUpdate = true;
+    }
+  }
+
   private requestRebuild(): void {
     if (this.rebuildQueued) return;
     this.rebuildQueued = true;
@@ -368,6 +428,7 @@ export class KittenViewer {
     this.scene.add(next.group);
     this.current = next;
     this.internals = (next.group.userData.internals ?? null) as KittenInternals | null;
+    this.applySkeletonMode();
     this.onMetrics(next.metrics);
   }
 

@@ -391,6 +391,22 @@ body {
 .view-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .view-chip.is-active { background: rgba(236, 229, 216, 0.12); color: var(--text); }
 
+.anatomy-row {
+  display: flex;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  width: max-content;
+}
+.anatomy-caption {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
 .icon-toggle {
   width: 38px;
   height: 38px;
