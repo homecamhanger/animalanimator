@@ -297,10 +297,10 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const legMul = morph.legMul;
   const shoulderX = clamp(0.148 * widthMul + 0.012, 0.115, 0.26);
   const hipX = clamp(rowData[1].offset + rowData[1].rowRadius * 0.55, 0.16, 0.38);
-  // The hip JOINT attaches closer to the midline — the haunch keeps its
-  // wide mass, but the limb roots medially (the femur head is medial), so
-  // the legs track under the body instead of splaying past the torso.
-  const hipJointX = clamp(hipX * 0.72, 0.115, 0.32);
+  // The hip JOINT attaches close to the midline — a cat's pelvis is only
+  // ~6 cm across, so the femur heads ride nearly on the spine while the
+  // haunch mass spreads laterally around them.
+  const hipJointX = clamp(hipX * 0.34, 0.048, 0.13);
   const frontZ = mz(0.4);
   const bellyBottomFront = (() => {
     // approximate underside of the chest row at the foreleg z
