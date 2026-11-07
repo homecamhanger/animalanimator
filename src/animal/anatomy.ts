@@ -54,6 +54,9 @@ export interface AnatomicalBone {
   via?: [number, number, number];
 }
 
+/** Atlanto-occipital joint — shared with skinRig for head-frame derivation. */
+export const SKULL_BASE: readonly [number, number, number] = [0, 0.788, 0.526];
+
 /* ------------------------------------------------------------------ */
 /* Builder helpers                                                     */
 /* ------------------------------------------------------------------ */
@@ -197,7 +200,7 @@ export function buildAnatomy(): AnatomicalBone[] {
     new THREE.Vector3(0, 0.730, 0.511),                                 // 26 C2 (axis)
     new THREE.Vector3(0, 0.768, 0.517),                                 // 27 C1 (atlas)
   ];
-  const skullBase: V3 = [0, 0.788, 0.526];
+  const skullBase: V3 = [...SKULL_BASE] as V3;
   const SP = (i: number): V3 => [spinePts[i].x, spinePts[i].y, spinePts[i].z];
 
   const sacrumId = 'sacrum';

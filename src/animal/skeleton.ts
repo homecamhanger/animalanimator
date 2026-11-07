@@ -111,6 +111,53 @@ export interface MorphScalars {
   pawMul: number;
 }
 
+/** Tail control points for a pose — world space, given the solved tail base.
+ *  Shared by solveSkeleton (fur prims) and skinRig (bone deltas). */
+export function tailControlPoints(poseId: PoseId, tailBase: THREE.Vector3, zScale: number): Array<[number, number, number]> {
+  const mz = (z: number) => z * zScale;
+  const sets: Record<PoseId, Array<[number, number, number]>> = {
+    standing: [
+      [tailBase.x, tailBase.y, tailBase.z],
+      [0.02, tailBase.y + 0.19, mz(-0.7)],
+      [0.085, tailBase.y + 0.32, mz(-0.57)],
+      [0.165, tailBase.y + 0.35, mz(-0.37)],
+      [0.235, tailBase.y + 0.345, mz(-0.16)],
+    ],
+    sitting: [
+      [0.07, tailBase.y, tailBase.z],
+      [0.34, Math.max(0.1, tailBase.y * 0.62), mz(-0.4)],
+      [0.45, 0.095, mz(-0.02)],
+      [0.41, 0.093, mz(0.3)],
+      [0.19, 0.092, mz(0.47)],
+      [0.1, 0.091, mz(0.56)],
+    ],
+    loaf: [
+      [0.08, tailBase.y, tailBase.z],
+      [0.36, 0.105, mz(-0.2)],
+      [0.44, 0.095, mz(0.17)],
+      [0.26, 0.092, mz(0.44)],
+      [0.12, 0.091, mz(0.5)],
+    ],
+    stretch: [
+      [0, tailBase.y, tailBase.z],
+      [0.02, tailBase.y + 0.2, mz(-0.71)],
+      [0.055, tailBase.y + 0.36, mz(-0.7)],
+      [0.125, tailBase.y + 0.46, mz(-0.55)],
+      [0.185, tailBase.y + 0.485, mz(-0.36)],
+    ],
+    curled: [
+      [-0.06, tailBase.y, tailBase.z],
+      [-0.36, 0.095, mz(-0.26)],
+      [-0.44, 0.093, mz(0.1)],
+      [-0.27, 0.091, mz(0.4)],
+      [0.09, 0.091, mz(0.44)],
+      [0.29, 0.1, mz(0.3)],
+      [0.34, 0.094, mz(0.1)],
+    ],
+  };
+  return sets[poseId];
+}
+
 /** Solve bones for a pose at a given weight. Pure — unit-checkable. */
 export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: Partial<LegTuning>): SolvedSkeleton {
   const morph = weightMorph(weight);
@@ -454,48 +501,9 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const rear = rowData[0];
   const tailBase = new THREE.Vector3(0, groundY(rear.ry + rear.rowRadius * 0.42), mz(-0.5));
   const tailMul = morph.tailMul;
-  const tailPointSets: Record<PoseId, Array<[number, number, number]>> = {
-    standing: [
-      [tailBase.x, tailBase.y, tailBase.z],
-      [0.02, tailBase.y + 0.19, mz(-0.7)],
-      [0.085, tailBase.y + 0.32, mz(-0.57)],
-      [0.165, tailBase.y + 0.35, mz(-0.37)],
-      [0.235, tailBase.y + 0.345, mz(-0.16)],
-    ],
-    sitting: [
-      [0.07, tailBase.y, tailBase.z],
-      [0.34, Math.max(0.1, tailBase.y * 0.62), mz(-0.4)],
-      [0.45, 0.095, mz(-0.02)],
-      [0.41, 0.093, mz(0.3)],
-      [0.19, 0.092, mz(0.47)],
-      [0.1, 0.091, mz(0.56)],
-    ],
-    loaf: [
-      [0.08, tailBase.y, tailBase.z],
-      [0.36, 0.105, mz(-0.2)],
-      [0.44, 0.095, mz(0.17)],
-      [0.26, 0.092, mz(0.44)],
-      [0.12, 0.091, mz(0.5)],
-    ],
-    stretch: [
-      [0, tailBase.y, tailBase.z],
-      [0.02, tailBase.y + 0.2, mz(-0.71)],
-      [0.055, tailBase.y + 0.36, mz(-0.7)],
-      [0.125, tailBase.y + 0.46, mz(-0.55)],
-      [0.185, tailBase.y + 0.485, mz(-0.36)],
-    ],
-    curled: [
-      [-0.06, tailBase.y, tailBase.z],
-      [-0.36, 0.095, mz(-0.26)],
-      [-0.44, 0.093, mz(0.1)],
-      [-0.27, 0.091, mz(0.4)],
-      [0.09, 0.091, mz(0.44)],
-      [0.29, 0.1, mz(0.3)],
-      [0.34, 0.094, mz(0.1)],
-    ],
-  };
+  const tailPointSets = tailControlPoints(poseId, tailBase, zScale);
   const tailCurve = new THREE.CatmullRomCurve3(
-    tailPointSets[poseId].map(([x, y, z]) => new THREE.Vector3(x, y, z)),
+    tailPointSets.map(([x, y, z]) => new THREE.Vector3(x, y, z)),
     false,
     'centripetal',
   );

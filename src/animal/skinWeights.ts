@@ -53,6 +53,11 @@ export interface SkinWeights {
 
 /** Field falloff, world units. Fur half-widths are ~0.08–0.19; σ ≈ 60 % of that. */
 const SIGMA = 0.058;
+/** Spine bones get a wider field — the bare fur topline rides ~0.22 above the
+ *  vertebral column, far beyond the cutoff of a midline capsule; without the
+ *  widening the topline falls into the rigid dead-zone bind and tears in
+ *  extreme poses (play-bow stretch). */
+const SIGMA_SPINE = 0.1;
 /** Skip bone fields weaker than this outright. */
 const FIELD_FLOOR = 1e-4; // ≈0.176 units cutoff — influences weaker than this are noise, not skin
 const INFLUENCES = 4;
@@ -64,6 +69,7 @@ interface BoneField {
   ax: number; ay: number; az: number;
   bx: number; by: number; bz: number;
   radius: number;
+  sigma: number;
   /** Sampled polyline for curved (`via`) bones: 2×(segments+1) coords ×3. */
   arc: Float32Array | null;
   gain: number;
@@ -71,7 +77,7 @@ interface BoneField {
   minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number;
 }
 
-const CUTOFF = Math.sqrt(-Math.log(FIELD_FLOOR)) * SIGMA; // distance beyond which field ≈ 0
+const CUTOFF = Math.sqrt(-Math.log(FIELD_FLOOR)) * SIGMA_SPINE; // max field reach (spine is widest)
 
 function sampleArc(bone: AnatomicalBone, segments: number): Float32Array {
   const out = new Float32Array((segments + 1) * 3);
@@ -96,6 +102,8 @@ function makeField(bone: AnatomicalBone): BoneField {
       ? bone.radii?.[0] ?? 0.02
       : bone.girth;
   const gain = bone.shape === 'plate' ? PLATE_GAIN : 1;
+  const isSpine = bone.region === 'spine' && bone.shape !== 'plate';
+  const sigma = isSpine ? SIGMA_SPINE : SIGMA;
 
   // bounds over from/to (+ the arc when present), expanded by the cutoff + radius
   let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -115,6 +123,7 @@ function makeField(bone: AnatomicalBone): BoneField {
     ax: bone.from[0], ay: bone.from[1], az: bone.from[2],
     bx: bone.to[0], by: bone.to[1], bz: bone.to[2],
     radius, arc, gain,
+    sigma,
     minX: minX - margin, maxX: maxX + margin,
     minY: minY - margin, maxY: maxY + margin,
     minZ: minZ - margin, maxZ: maxZ + margin,
@@ -190,7 +199,7 @@ export function computeSkinWeights(
       }
       const d = boneDistance(field, px, py, pz);
       if (d < nearestD) { nearestD = d; nearestBone = bi; }
-      const f = Math.exp(-((d / SIGMA) * (d / SIGMA))) * field.gain;
+      const f = Math.exp(-((d / field.sigma) * (d / field.sigma))) * field.gain;
       if (f < FIELD_FLOOR) continue;
       // insert into the top-K (sorted descending)
       let i = filled < INFLUENCES ? filled : INFLUENCES;
@@ -203,9 +212,19 @@ export function computeSkinWeights(
     }
 
     if (filled === 0 || nearestBone < 0) {
-      // Paranoia fallback: bind rigidly to the nearest bone (should be unreachable —
-      // the fur fills the convex-ish body, every vertex is near some bone).
-      const target = nearestBone < 0 ? 0 : nearestBone;
+      // Dead zone — no bone's field reaches this vertex (e.g. the bare fur
+      // topline, which rides ~0.22 above the vertebral column while the
+      // cutoff is ≈0.176). The AABB-culled `nearestBone` is meaningless
+      // here, so do a full scan for the TRUE nearest bone and bind rigidly.
+      // Adjacent spine bones differ by only ~1–2° per pose, so a rigid bind
+      // along the topline is visually indistinguishable from a blend.
+      let trueD = Infinity;
+      let trueBone = -1;
+      for (let bi = 0; bi < fields.length; bi++) {
+        const d = boneDistance(fields[bi], px, py, pz);
+        if (d < trueD) { trueD = d; trueBone = bi; }
+      }
+      const target = trueBone < 0 ? 0 : trueBone;
       indices.set([target, 0, 0, 0], vi * INFLUENCES);
       weights.set([1, 0, 0, 0], vi * INFLUENCES);
       boneMass[target] += 1;
@@ -229,27 +248,41 @@ export function computeSkinWeights(
 
   // Orphan pass: a bone that owns no flesh can never drag its skin along.
   // Force-bind its nearest vertex to it (rigid) so the rig is total.
+  // CRITICAL: the shell is unindexed — every seam vertex exists in several
+  // rows at identical coordinates, and ALL of them must receive the same
+  // rebind or the mesh cracks (a vertex glued to one bone while its twins
+  // follow another tears a hole in the skin).
+  const positionRows = new Map<string, number[]>();
+  for (let vi = 0; vi < n; vi++) {
+    // Exact string key of the raw coordinates — identical shell duplicates
+    // produce identical strings, so every twin row is found.
+    const key = `${pos[vi * 3]},${pos[vi * 3 + 1]},${pos[vi * 3 + 2]}`;
+    const rows = positionRows.get(key);
+    if (rows) rows.push(vi); else positionRows.set(key, [vi]);
+  }
   for (let bi = 0; bi < bones.length; bi++) {
     if (boneMass[bi] > 0) continue;
-    let bestD = Infinity;
-    let bestV = -1;
     const field = fields[bi];
-    for (let vi = 0; vi < n; vi++) {
-      const dx = pos[vi * 3] - (field.ax + field.bx) / 2;
-      const dy = pos[vi * 3 + 1] - (field.ay + field.by) / 2;
-      const dz = pos[vi * 3 + 2] - (field.az + field.bz) / 2;
+    const cx = (field.ax + field.bx) / 2, cy = (field.ay + field.by) / 2, cz = (field.az + field.bz) / 2;
+    let bestD = Infinity;
+    let bestRows: number[] | null = null;
+    for (const rows of positionRows.values()) {
+      const vi = rows[0];
+      const dx = pos[vi * 3] - cx, dy = pos[vi * 3 + 1] - cy, dz = pos[vi * 3 + 2] - cz;
       const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestD) { bestD = d; bestV = vi; }
+      if (d < bestD) { bestD = d; bestRows = rows; }
     }
-    if (bestV < 0) continue;
-    const base = bestV * INFLUENCES;
-    const displacedBone = indices[base];
-    const displacedWeight = weights[base];
-    boneMass[displacedBone] -= displacedWeight;
-    for (let i = 0; i < INFLUENCES; i++) { indices[base + i] = 0; weights[base + i] = 0; }
-    indices[base] = bi;
-    weights[base] = 1;
-    boneMass[bi] += 1;
+    if (!bestRows) continue;
+    for (const vi of bestRows) {
+      const base = vi * INFLUENCES;
+      const displacedBone = indices[base];
+      const displacedWeight = weights[base];
+      boneMass[displacedBone] -= displacedWeight;
+      for (let i = 0; i < INFLUENCES; i++) { indices[base + i] = 0; weights[base + i] = 0; }
+      indices[base] = bi;
+      weights[base] = 1;
+      boneMass[bi] += 1;
+    }
   }
 
   return { indices, weights, boneCount: bones.length, vertexCount: n, boneMass };

@@ -129,6 +129,13 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   // to skin and accessories alike (alignment preserved).
   const bodyGroup = new THREE.Group();
   bodyGroup.position.y = floorLift;
+  // Head-locked accessories: everything raymarched against the head frame
+  // (nose, philtrum, inner-ear lozenges, whiskers, eyes). Grouped so the
+  // skinning rig can re-anchor them rigidly with ONE transform when the
+  // head poses — the SDF path leaves it at identity.
+  const headAccessories = new THREE.Group();
+  headAccessories.name = 'headAccessories';
+  bodyGroup.add(headAccessories);
   bodyGroup.add(skinMesh);
   root.add(bodyGroup);
 
@@ -216,7 +223,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   }
   openEyes.visible = pose.eyesOpen;
   closedEyes.visible = !pose.eyesOpen;
-  bodyGroup.add(openEyes, closedEyes);
+  headAccessories.add(openEyes, closedEyes);
 
   // Nose + philtrum, proud of the muzzle surface.
   {
@@ -226,7 +233,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
     nose.position.copy(noseSnap.point);
     nose.quaternion.copy(faceQuat(noseSnap.dir));
     mark(nose);
-    bodyGroup.add(nose);
+    headAccessories.add(nose);
     const upper = snapFromLocal(0, -0.125, 0.03, 0, -0.16, 1, 0.004).point;
     const lower = snapFromLocal(0, -0.17, 0.015, 0, -0.2, 1, 0.004).point;
     const philtrum = new THREE.Mesh(
@@ -234,7 +241,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
       sharedMats.nose,
     );
     mark(philtrum);
-    bodyGroup.add(philtrum);
+    headAccessories.add(philtrum);
   }
 
   // Inner-ear pink lozenges — raymarch out along each ear's direction and lie
@@ -253,7 +260,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
     inner.position.copy(anchor).addScaledVector(normal, t + 0.005);
     inner.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
     mark(inner);
-    bodyGroup.add(inner);
+    headAccessories.add(inner);
   }
 
   // Whiskers — bases locked to the muzzle/cheek surface; reach extends with
@@ -273,7 +280,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
         buildTaperedTube(curve, 8, 5, () => 0.0031),
         sharedMats.whisker,
       );
-      bodyGroup.add(whisker);
+      headAccessories.add(whisker);
     }
   }
 

@@ -85,6 +85,79 @@ ossicles). We draw 215 *segments*. Omitted, deliberately:
 
 ## Skinning — status
 
+**Step 2 shipped: the DQS runtime bind + pose re-target.** (step 1: weights —
+see below.)
+
+- `src/animal/skinning.ts` — the dual-quaternion core: pivot deltas
+  (`v' = R·(v − o) + o'`), dual-quaternion accumulation with hemisphere flip,
+  blend normalisation, translation extraction `t = 2·vec(q̄q̄*·q̄ᵣ*)`, normal
+  re-rotation. Allocation-free per-vertex loop; pure math, no anatomy.
+- `src/animal/skinRig.ts` — the bind. The SDF solve already knows every joint
+  in world space, so bones are re-targeted by registering them to the solved
+  chains instead of authored rotations: spine/sacrum/cervicals ride a
+  closest-arc-length t on an extended ridge curve (rump→…→neck_low→skullBase,
+  tangent shortest-arc rotation), tail caudals ride the per-pose Catmull-Rom
+  the same way, limb bones take their solved segment (`upper/lowerA/lowerB`,
+  `femur/tibia/metatarsus/phalanx`) with a direction-arc rotation about the
+  segment origin, skull bones take the head frame directly
+  (`Euler(pitch, yaw, 0, 'YXZ')`), and everything else — ribs, sternum,
+  girdles, phalanges, tarsals — inherits its anatomical parent's delta
+  (rigid frame copy). Deltas are cached per (pose, weight).
+- **No cracks, ever:** weights are a pure function of position, so duplicated
+  shell vertices (the isosurface is unindexed) displace identically —
+  verified exactly, max twin deviation 0.0 in every pose.
+- **Floor reference:** like the SDF builds, the skinned path re-measures the
+  lowest deformed skin point and re-grounds the group on the pose's contact
+  target (paws 0.002, loaf/curled their floorY) — the cat never sinks or
+  floats when poses switch.
+- **Head-locked accessories** (eyes, nose, philtrum, inner-ear lozenges,
+  whiskers) are grouped under `headAccessories` and re-anchored rigidly by
+  the head delta; eye open/closed state flips with the pose (you can't build
+  "curled" from a standing build — the build itself is standing, now
+  followed by the deformation).
+- **Try it:** sidebar → Anatomy → **Skinned**. The fur you see is the bone
+  rig posing the standing mesh — pose chips switch instantly (no SDF rebuild,
+  ~40 ms deform), breathing rides as before. Back to Fur/Overlay/Skeleton →
+  a real SDF rebuild restores that artifact. Weight slider stays live.
+- `npm run check:skinning` (in `npm run check`) — per pose: standing is an
+  exact identity, all vertices finite, normals unit (err < 1e-7), coincident
+  rows displace identically (no cracks), displacement magnitudes sane.
+- Verified headlessly against the SDF ground truth (`scripts/render-skinned.ts`
+  + `scripts/compare-poses.py`, cyan = SDF, orange = skinned): sitting,
+  stretch, loaf and curled all agree within ~1–3 cm over the torso, limbs
+  overlapping near-perfectly. Residuals are expected, documented below.
+
+**What the re-target does NOT (yet) reproduce:**
+
+- Ear pose is procedural per build (SDF `earPerk`), not bone-driven — in
+  Skinned mode the ears ride the head frame in their standing shape (ears
+  read tall in loaf/curled).
+- No toe/dewclaw articulation — the paw rides the wrist/metatarsus segment
+  rigidly (dewclaws carry real weight, but no independent motion yet).
+- SDF art-direction is global (belly sag, row scaling, socket carving); a
+  pure bone solve can't recreate it. Residuals: topline rides ~1–3 cm high
+  in loaf/curled, foreleg in play-bow slightly under-extended, deep folds
+  cramp in curled (overlapping facets, not tears). Correctives are roadmap.
+- Deltas map standing@w → pose@w; the anatomy is weight-1.0-registered, so
+  at extreme slider weights a small skew remains (sub-centimetre — same
+  caveat as the wave-1 weights).
+
+**Known weakness & the lever to pull (unchanged).** Deep axial bones (mid
+thoracics) each bind a whisper of mass — adjacent-vertebrae blending keeps
+deformation correct. If the sit/stretch spine ever reads stiff, the lever is
+a per-bone reach multiplier (deep bones get a wider σ) or a Bone-Heat
+Laplacian diffusion pass. In the DQS wave the *topline* was the actual hole —
+closed by widening spine σ to 0.10 (`SIGMA_SPINE`) so the bare fur above the
+column (~0.22 clear of any bone, past the 0.176 cutoff) binds to the spine
+instead of falling into the dead-zone fallback. The dead-zone path now scans
+for the TRUE nearest bone rather than the AABB-culled one.
+
+**Remaining roadmap:**
+
+3. ~~Re-target the 5 poses onto the rig~~ — shipped as the Skinned toggle.
+4. Corrective pass for sit & stretch (and ear/toe articulation if wanted).
+5. Retire the SDF pose path (keep SDF only for construction + idle detail).
+
 **Step 1 shipped: the analytic weight solver.**
 
 - `src/animal/skinWeights.ts` — per-vertex weights: distance to every bone
@@ -104,22 +177,6 @@ ossicles). We draw 215 *segments*. Omitted, deliberately:
   `npx tsx scripts/solve-weights.ts` prints the full report and writes
   `.scratch/weights-mesh.json` (+ `weights-mesh.json` renders via
   `scripts/render-preview.py`).
-
-**Known weakness & the lever to pull.** Deep axial bones (mid thoracics,
-small carpals) each bind < 0.05 % of mass — the softmax favours shallow bones
-near the surface. The smooth top-4 spread across adjacent vertebrae keeps
-deformation correct, but for the sit/stretch spine bend, if we see
-under-deformation, the fix is a per-bone reach multiplier (deep bones get a
-wider σ), or a Bone-Heat-style Laplacian diffusion pass as the documented
-fallback. Not measured as broken — noted before it becomes one.
-
-**Remaining roadmap:**
-
-2. Runtime DQS deformation in the viewer behind a toggle (`Fur SDF | Skinned`).
-3. Re-target the 5 poses onto the rig (poses already exist as two-bone
-   chains; they transplant onto femur/tibia, humerus/radius).
-4. Corrective pass for sit & stretch.
-5. Retire the SDF pose path (keep SDF only for construction + idle detail).
 
 ## Skinning — the options we weighed
 
@@ -177,9 +234,10 @@ The options, ranked by fit to this project:
 
 1. ~~`scripts/solve-weights.ts`~~ — **done** (see "status" above). Runtime
    DQS bind will consume `computeSkinWeights()` directly.
-2. Runtime DQS deformation in the viewer behind a toggle (`Fur SDF | Skinned`).
-3. Re-target the 5 poses onto the rig (poses exist as 2-bone chains already —
-   they transplant almost verbatim onto femur/tibia, humerus/radius).
+2. ~~Runtime DQS deformation in the viewer behind a toggle (`Fur SDF | Skinned`).~~
+   **Done** — sidebar → Anatomy → Skinned.
+3. ~~Re-target the 5 poses onto the rig~~ **Done** — deltas register against
+   the solved chains/frames (see "status" above).
 4. Corrective pass for sit & stretch (the two poses with the deepest folds).
 5. Retire the SDF pose path (keep SDF only for construction + idle detail).
 
@@ -198,6 +256,11 @@ The options, ranked by fit to this project:
 - `scripts/dump-anatomy.ts` / `render-anatomy.py` — JSON dump + 2D preview
 - `scripts/render-overlay.py` — x-ray composite (fur ghost + bones)
 - `src/animal/skinWeights.ts` — the analytic weight solver + region debug palette
+- `src/animal/skinning.ts` — DQS core (pivot deltas, dual quaternions, normal re-rotation)
+- `src/animal/skinRig.ts` — pose→bone deltas registered to the solved chains
 - `scripts/solve-weights.ts` — offline solve + report + painted dump
+- `scripts/render-skinned.ts` — headless deform → `.scratch/skinned-<pose>.json`
+- `scripts/compare-poses.py` — SDF vs skinned overlay (cyan/orange)
+- `scripts/check-skinning.ts` — `npm run check:skinning` (DQS invariants)
 - `scripts/check-weights.ts` — `npm run check:weights`
 - `scripts/check-anatomy.ts` — `npm run check:anatomy`

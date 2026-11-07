@@ -13,7 +13,9 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { POSE_ORDER, POSE_PARAMS, type PoseId } from '../animal/profiles';
 import type { KittenBuild, KittenMetrics, KittenInternals } from '../animal/kitten';
 import { buildSkeletonGroup, type SkeletonMode } from './skeletonScene';
-import { computeSkinWeights, paintBoneWeightColors } from '../animal/skinWeights';
+import { computeSkinWeights, paintBoneWeightColors, type SkinWeights } from '../animal/skinWeights';
+import { deformSkin } from '../animal/skinning';
+import { getPoseDeformation } from '../animal/skinRig';
 import type { AnimalSpec } from '../animal/registry';
 import type { LegTuning } from '../animal/tuning';
 import { backdropById, paintBackdrop, type BackdropId } from './backdrop';
@@ -64,6 +66,8 @@ export class KittenViewer {
   private internals: KittenInternals | null = null;
   private skeletonGroup: THREE.Group | null = null;
   private skeletonMode: SkeletonMode = 'off';
+  /** The pose the current geometry was BUILT at (skinned mode always builds standing). */
+  private builtPose = 'standing';
   private furFade: { transparent: boolean; opacity: number; depthWrite: boolean } | null = null;
   private weightsMaterial: THREE.MeshBasicMaterial | null = null;
   private rebuildQueued = false;
@@ -183,6 +187,10 @@ export class KittenViewer {
 
   setPose(pose: string): void {
     this.pose = pose;
+    if (this.skeletonMode === 'skinned' && this.current) {
+      this.applySkinToCurrent();
+      return;
+    }
     this.requestRebuild();
   }
 
@@ -213,9 +221,25 @@ export class KittenViewer {
     this.idleMotion = enabled;
   }
 
-  /** Fur only / translucent fur + bones / skeleton only. */
+  /** Fur only / translucent fur + bones / skeleton only / bone-driven skinning. */
   setSkeletonMode(mode: SkeletonMode): void {
     this.skeletonMode = mode;
+    if (mode === 'skinned') {
+      // The current geometry is an SDF pose build — deform in place only works
+      // on the standing rest build, so re-cut one first.
+      if (this.builtPose !== 'standing') {
+        this.requestRebuild();
+        return;
+      }
+      // Idempotent — makes sure the deformed geometry AND the pose-dependent
+      // eye state are in place when entering from other modes.
+      this.applySkinToCurrent();
+    } else if (this.builtPose !== this.pose) {
+      // Leaving skinned mode: the geometry was deformed standing→pose; rebuild
+      // so other modes see the artifact the SDF actually built for this pose.
+      this.requestRebuild();
+      return;
+    }
     this.applySkeletonMode();
   }
 
@@ -390,6 +414,15 @@ export class KittenViewer {
     restoreFur();
     restoreWeights();
 
+    if (this.skeletonMode === 'skinned') {
+      // Bone-driven fur: no bones shown, fur is the pose itself. The deform
+      // and the pose-dependent eye state were applied by the caller
+      // (rebuild / setPose / setSkeletonMode).
+      bones.visible = false;
+      if (internals) internals.breathRoot.visible = true;
+      return;
+    }
+
     if (this.skeletonMode === 'off') {
       bones.visible = false;
       if (internals) internals.breathRoot.visible = true;
@@ -483,16 +516,80 @@ export class KittenViewer {
 
   private rebuild(): void {
     const previous = this.current;
-    const next = this.spec.build({ weight: this.weight, pose: this.pose, coat: this.coat, tuning: this.tuning ?? undefined });
+    const skinned = this.skeletonMode === 'skinned';
+    const buildPose = skinned ? 'standing' : this.pose;
+    const next = this.spec.build({ weight: this.weight, pose: buildPose, coat: this.coat, tuning: this.tuning ?? undefined });
     if (previous) {
       this.scene.remove(previous.group);
       previous.dispose();
     }
     this.scene.add(next.group);
     this.current = next;
+    this.builtPose = buildPose;
     this.internals = (next.group.userData.internals ?? null) as KittenInternals | null;
+    if (this.skeletonMode === 'skinned') this.applySkinToCurrent();
     this.applySkeletonMode();
     this.onMetrics(next.metrics);
+  }
+
+  /**
+   * Deform the standing rest geometry into the current pose with the bone
+   * rig (see skinRig.ts). Everything is derived from the pristine rest
+   * buffers stashed in geometry.userData on first use, so this is safe to
+   * call repeatedly (pose switches, mode re-entry).
+   */
+  private applySkinToCurrent(): void {
+    const internals = this.internals;
+    if (!internals || this.builtPose !== 'standing') return;
+    const geometry = internals.skinMesh.geometry;
+    const store = geometry.userData as {
+      skinRest?: { positions: Float32Array; normals: Float32Array };
+      skinWeights?: SkinWeights;
+    };
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const normal = geometry.getAttribute('normal') as THREE.BufferAttribute;
+    if (!store.skinRest) {
+      store.skinRest = {
+        positions: new Float32Array(position.array as Float32Array),
+        normals: new Float32Array(normal.array as Float32Array),
+      };
+      store.skinWeights = computeSkinWeights(position);
+    }
+    const deformation = getPoseDeformation(this.pose as PoseId, this.weight);
+    deformSkin(
+      store.skinRest.positions,
+      store.skinRest.normals,
+      position.array as Float32Array,
+      normal.array as Float32Array,
+      store.skinWeights as SkinWeights,
+      deformation.deltas,
+    );
+    position.needsUpdate = true;
+    normal.needsUpdate = true;
+    geometry.computeBoundingSphere();
+
+    // Ground the posed cat exactly like kitten.ts does per SDF build.
+    const params = POSE_PARAMS[this.pose as PoseId];
+    const target = params.legsVisible ? 0.002 : params.floorY;
+    const arr = position.array as Float32Array;
+    let minY = Infinity;
+    for (let i = 1; i < arr.length; i += 3) if (arr[i] < minY) minY = arr[i];
+    internals.breathRoot.position.y = target - minY;
+
+    // Head-locked accessories (eyes, nose, whiskers, inner-ear lozenges) ride
+    // the head frame rigidly.
+    const accessories = internals.breathRoot.getObjectByName('headAccessories');
+    if (accessories) {
+      accessories.quaternion.copy(deformation.head.rotation);
+      accessories.position.setFromMatrixPosition(deformation.head.matrix);
+    }
+
+    // The fur was built at the STANDING pose (eyes open); flip eye state to
+    // the POSE the skin was deformed into.
+    const eyesOpen = POSE_PARAMS[this.pose as PoseId].eyesOpen;
+    internals.openEyes.visible = eyesOpen;
+    const closedEyes = internals.breathRoot.getObjectByName('closedEyes');
+    if (closedEyes) closedEyes.visible = !eyesOpen;
   }
 
   /** Render one contact-sheet cell to a transparent canvas. */
