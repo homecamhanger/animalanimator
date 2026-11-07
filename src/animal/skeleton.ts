@@ -90,9 +90,9 @@ interface SpineRow {
 }
 
 const TORSO_ROWS: SpineRow[] = [
-  { t: 0.02, offsetFrac: 0.0, r: 0.148, sag: 0.0, belly: false }, // rump tip
-  { t: 0.13, offsetFrac: 0.44, r: 0.19, sag: 0.005, belly: false }, // haunches
-  { t: 0.3, offsetFrac: 0.5, r: 0.172, sag: 0.012, belly: false }, // waist
+  { t: 0.02, offsetFrac: 0.0, r: 0.141, sag: 0.006, belly: false }, // rump tip
+  { t: 0.13, offsetFrac: 0.40, r: 0.152, sag: 0.005, belly: false }, // haunches
+  { t: 0.3, offsetFrac: 0.5, r: 0.162, sag: 0.012, belly: false }, // waist
   { t: 0.47, offsetFrac: 0.47, r: 0.178, sag: 0.03, belly: true }, // mid belly
   { t: 0.66, offsetFrac: 0.48, r: 0.185, sag: 0.012, belly: false }, // chest
   { t: 0.87, offsetFrac: 0.27, r: 0.118, sag: 0.0, belly: false }, // shoulder → neck
@@ -179,16 +179,16 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   for (const { row, z, ry, rowRadius, offset } of rowData) {
     const y = groundY(ry);
     if (row.offsetFrac === 0) {
-      addSphere('spine_rump', 0, y, z, rowRadius, 'fur', 0, 0.08);
+      addSphere('spine_rump', 0, y, z, rowRadius, 'fur', 0, 0.14);
       continue;
     }
-    addSphere(`spine_${row.t.toFixed(2)}_l`, -offset, y, z, rowRadius, 'fur', row.t, 0.08);
-    addSphere(`spine_${row.t.toFixed(2)}_r`, offset, y, z, rowRadius, 'fur', row.t, 0.08);
+    addSphere(`spine_${row.t.toFixed(2)}_l`, -offset, y, z, rowRadius, 'fur', row.t, 0.14);
+    addSphere(`spine_${row.t.toFixed(2)}_r`, offset, y, z, rowRadius, 'fur', row.t, 0.14);
     // Centre bridge sphere — kills the double-bump crease along the spine.
-    addSphere(`spine_${row.t.toFixed(2)}_c`, 0, y, z, rowRadius * 0.82, 'fur', row.t, 0.08);
+    addSphere(`spine_${row.t.toFixed(2)}_c`, 0, y, z, rowRadius * 0.82, 'fur', row.t, 0.14);
   }
   // Sagging belly core (the chonk engine) + cream belly lighten.
-  addSphere('belly_sag', 0, groundY(sagBallY), midRow.z, sagBallRadius, 'fur', 0.47, 0.08);
+  addSphere('belly_sag', 0, groundY(sagBallY), midRow.z, sagBallRadius, 'fur', 0.47, 0.14);
   addSphere('belly_cream', 0, groundY(sagBallY - 0.02), midRow.z + 0.04, sagBallRadius * 0.9, 'cream', 0.47, 0.06);
 
   // Chest blaze — a soft cream ball nestled between the forelegs.
@@ -199,7 +199,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
 
   const neckY = groundY(BASE_SPINE + spineOffset(1) + 0.075);
   const neckZ = mz(0.565);
-  addSphere('neck_low', 0, neckY, neckZ, 0.095 * (1 + morph.chonk * 0.38) * pose.scaleY, 'fur', 0.97, 0.06);
+  addSphere('neck_low', 0, neckY, neckZ, 0.095 * (1 + morph.chonk * 0.38) * pose.scaleY, 'fur', 0.97, 0.085);
 
   const headZ = mz(0.565 + 0.075 + pose.headForward);
   const headBaseY = groundY(BASE_SPINE + spineOffset(1) + 0.27 - pose.headDrop * 0.55);
@@ -295,12 +295,12 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   /* ------------------------------ Legs -------------------------------- */
 
   const legMul = morph.legMul;
-  const shoulderX = clamp(0.148 * widthMul + 0.012, 0.115, 0.26);
+  const shoulderX = clamp(0.16 * widthMul + 0.016, 0.125, 0.27);
   const hipX = clamp(rowData[1].offset + rowData[1].rowRadius * 0.55, 0.16, 0.38);
-  // The hip JOINT attaches close to the midline — a cat's pelvis is only
-  // ~6 cm across, so the femur heads ride nearly on the spine while the
-  // haunch mass spreads laterally around them.
-  const hipJointX = clamp(hipX * 0.5, 0.062, 0.155);
+  // Wide-set femurs — two cones closer than their own radius simply fuse
+  // into one column, so the hip joint sits well off the midline and the
+  // haunch mass spreads around it.
+  const hipJointX = clamp(hipX * 0.68, 0.085, 0.21);
   const frontZ = mz(0.4);
   const bellyBottomFront = (() => {
     // approximate underside of the chest row at the foreleg z
@@ -405,7 +405,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       const { stifle, hock, mtp, toe } = composeHind(hindOrigin);
       const metSplit = hock.clone().lerp(mtp, 0.5);
       const chain = [
-        { to: stifle, r1: 0.125 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+        { to: stifle, r1: 0.108 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
         { to: hock, r1: 0.068 * legMul, r2: 0.05 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
         { to: metSplit, r1: 0.045 * legMul, r2: 0.043 * legMul, flow: [1.58, 1.66] as [number, number], tag: 'metatarsus' },
         { to: mtp, r1: 0.043 * legMul, r2: 0.041 * legMul, flow: [1.66, 1.7] as [number, number], tag: 'metatarsusB', color: 'sock' as BallColor },
@@ -426,7 +426,7 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   // joints, so chains stay slim shafts instead of fusing into a blob.
   const LEG_BLEND: Record<string, number> = {
     upper: 0.062, lowerA: 0.04, lowerB: 0.034,
-    femur: 0.065, tibia: 0.042, metatarsus: 0.034, metatarsusB: 0.034, phalanx: 0.032,
+    femur: 0.05, tibia: 0.042, metatarsus: 0.034, metatarsusB: 0.034, phalanx: 0.032,
   };
   for (const seg of legSegments) {
     const dir = seg.to.clone().sub(seg.from);
