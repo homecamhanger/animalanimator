@@ -13,6 +13,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { POSE_ORDER, POSE_PARAMS, type PoseId } from '../animal/profiles';
 import type { KittenBuild, KittenMetrics, KittenInternals } from '../animal/kitten';
 import type { AnimalSpec } from '../animal/registry';
+import type { LegTuning } from '../animal/tuning';
 import { backdropById, paintBackdrop, type BackdropId } from './backdrop';
 import { composeContactSheet, type SheetCell } from './contactSheet';
 
@@ -55,6 +56,7 @@ export class KittenViewer {
   private pose: string = 'standing';
   private coat: string = 'orangeTabby';
   private backdrop: BackdropId = 'studio';
+  private tuning: Partial<LegTuning> | null = null;
 
   private current: KittenBuild | null = null;
   private internals: KittenInternals | null = null;
@@ -164,6 +166,7 @@ export class KittenViewer {
     this.spec = spec;
     this.pose = spec.defaultPose;
     this.coat = spec.defaultCoat;
+    this.tuning = null;
     this.rebuild();
   }
 
@@ -180,6 +183,11 @@ export class KittenViewer {
   setCoat(coat: string): void {
     this.coat = coat;
     this.rebuild(); // coat changes swap materials — cheap to do immediately
+  }
+
+  setTuning(tuning: Partial<LegTuning> | null): void {
+    this.tuning = tuning;
+    this.requestRebuild();
   }
 
   setBackdrop(backdrop: BackdropId): void {
@@ -212,8 +220,8 @@ export class KittenViewer {
     this.controls.enabled = false;
   }
 
-  getState(): { weight: number; pose: string; coat: string } {
-    return { weight: this.weight, pose: this.pose, coat: this.coat };
+  getState(): { weight: number; pose: string; coat: string; tuning: Partial<LegTuning> | null } {
+    return { weight: this.weight, pose: this.pose, coat: this.coat, tuning: this.tuning };
   }
 
   /** Render the current view as a PNG blob (studio backdrop or alpha). */
@@ -352,7 +360,7 @@ export class KittenViewer {
 
   private rebuild(): void {
     const previous = this.current;
-    const next = this.spec.build({ weight: this.weight, pose: this.pose, coat: this.coat });
+    const next = this.spec.build({ weight: this.weight, pose: this.pose, coat: this.coat, tuning: this.tuning ?? undefined });
     if (previous) {
       this.scene.remove(previous.group);
       previous.dispose();

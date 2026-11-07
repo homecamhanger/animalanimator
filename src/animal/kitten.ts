@@ -17,6 +17,7 @@ import { buildTaperedTube, limbBetween, countVertices, countTriangles, disposeGe
 import { coatById, type CoatId } from './coats';
 import { buildSkinGeometry, makeFurMaterial, surfaceDistance } from './fur';
 import { solveSkeleton } from './skeleton';
+import type { LegTuning } from './tuning';
 import { POSE_PARAMS, type PoseId } from './profiles';
 
 export interface KittenOptions {
@@ -24,6 +25,8 @@ export interface KittenOptions {
   weight: number;
   pose: PoseId;
   coat: CoatId;
+  /** Optional leg-tuning overrides (UI sliders). Missing fields fall back to the pose defaults. */
+  tuning?: Partial<LegTuning>;
 }
 
 export interface KittenMetrics {
@@ -96,7 +99,7 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   const started = performance.now();
   const pose = POSE_PARAMS[options.pose];
   const spec = coatById(options.coat);
-  const skeleton = solveSkeleton(options.pose, options.weight);
+  const skeleton = solveSkeleton(options.pose, options.weight, options.tuning);
 
   const root = new THREE.Group();
   root.name = 'kitten';

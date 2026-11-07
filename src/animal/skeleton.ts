@@ -19,6 +19,7 @@ import {
   weightMorph,
   type PoseId,
 } from './profiles';
+import { mergeLegTuning, type LegTuning } from './tuning';
 
 /** Colour roles; resolved to actual shades by the coat at build time. */
 export type BallColor =
@@ -93,7 +94,7 @@ export interface MorphScalars {
 }
 
 /** Solve bones for a pose at a given weight. Pure — unit-checkable. */
-export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
+export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: Partial<LegTuning>): SolvedSkeleton {
   const morph = weightMorph(weight);
   const pose = POSE_PARAMS[poseId];
   const c = morph.chonk;
@@ -309,49 +310,72 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   // Every leg is a TWO-BONE chain — upper bone and lower bone — solved with a
   // knee offset from the bisector in the y-z plane. Cat anatomy: front elbows
   // point back, hind stifles point forward. Ball chains subdivide each bone.
-  const twoBone = (
-    a: THREE.Vector3,
-    b: THREE.Vector3,
-    bendZ: number,
-    rA: number,
-    rB: number,
-    rC: number,
-    flowA: [number, number],
-    flowB: [number, number],
-    tag: string,
-  ) => {
-    const unit = b.clone().sub(a).normalize();
-    const perp = new THREE.Vector3(0, unit.z, -unit.y).normalize(); // ⊥ unit in the y–z plane
-    const knee = a.clone().add(b).multiplyScalar(0.5).addScaledVector(perp, bendZ);
-    legSegments.push({ x: a.x, from: a, to: knee, r1: rA, r2: rB, flow: flowA, tag });
-    legSegments.push({ x: a.x, from: knee, to: b, r1: rB, r2: rC, flow: flowB, tag });
-    legSegments.push({ x: a.x, from: knee, to: knee, r1: rB * 0.94, r2: rB * 0.94, flow: [(flowA[1] + flowB[0]) / 2, (flowA[1] + flowB[0]) / 2], tag: `${tag}_knee` });
-    return knee;
+  const X_AXIS = new THREE.Vector3(1, 0, 0);
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const tuning = mergeLegTuning(poseId, tuningOverride);
+  // Chains are pinned vertically to their built-in endpoint heights (the
+  // poses were art-directed around these contacts) so slider tweaks keep
+  // BOTH paw pairs working for the floor instead of jack-knifing the cat.
+  // floorLift in kitten.ts remains the absolute no-penetration backstop.
+  // Shifts are clamped — past ±14 cm the pose genuinely can't stay planted.
+  const MAX_CHAIN_SHIFT = 0.14;
+  const HIND_PLANT_Y: Record<PoseId, number> = {
+    standing: 0.0235,
+    sitting: 0.0221,
+    stretch: -0.0228,
+    loaf: 0.0226,
+    curled: 0.0238,
   };
-
+  const FRONT_PLANT_Y: Record<PoseId, number> = {
+    standing: 0.1967,
+    sitting: 0.0895,
+    stretch: -0.1777,
+    loaf: -0.1993,
+    curled: -0.2063,
+  };
+  // The MTP (toe) joint's fold direction varies by anatomy: weight-bearing
+  // poses bend it upward (negative), the tucked poses wrap it downward.
+  const TOE_TURN_SIGN: Record<PoseId, 1 | -1> = {
+    standing: -1,
+    sitting: -1,
+    stretch: -1,
+    loaf: 1,
+    curled: 1,
+  };
+  const toeTurnSign = TOE_TURN_SIGN[poseId];
+  const frontPaw: Array<{ x: number; z: number }> = [];
+  const hindPaw: Array<{ x: number; z: number }> = [];
   // Legs exist in EVERY pose — loaf/curled fold them under the body instead
   // of deleting them, so the haunches keep their volume.
-  const hindToeZ = !pose.legsVisible ? Number.POSITIVE_INFINITY : poseId === 'sitting' ? mz(0.26) : mz(-0.075);
   for (const side of [-1, 1]) {
     {
       const frontX = side * shoulderX;
-      if (pose.frontLegAngle > 0.05) {
-        // Play bow: forelegs reach forward; a soft forward elbow.
-        const angle = pose.frontLegAngle;
-        const shoulder = new THREE.Vector3(frontX, bellyBottomFront + 0.16, frontZ);
-        const len = (shoulder.y - 0.055) / Math.cos(angle);
-        const tip = new THREE.Vector3(
-          frontX,
-          shoulder.y - Math.cos(angle) * len,
-          frontZ + Math.sin(angle) * len,
-        );
-        twoBone(shoulder, tip, 0.05, 0.1 * legMul, 0.074 * legMul, 0.058 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
-      } else {
-        // Standing / sitting / tucked: straight-ish column, elbow tucked slightly back.
-        const shoulder = new THREE.Vector3(frontX, bellyBottomFront + 0.14, frontZ);
-        const ankle = new THREE.Vector3(frontX, 0.065, frontZ + 0.012);
-        twoBone(shoulder, ankle, -0.035, 0.1 * legMul, 0.073 * legMul, 0.057 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
+      // FRONT — free two-bone chain from the shoulder anchor. floorLift
+      // grounds the build on the lowest point, so extreme slider values
+      // can't push the cat through the floor.
+      const front = tuning.front;
+      const shoulder = new THREE.Vector3(frontX, bellyBottomFront + (pose.frontLegAngle > 0.05 ? 0.16 : 0.14), frontZ);
+      const upperDir = new THREE.Vector3(0, -Math.sin(rad(front.upperAngle)), Math.cos(rad(front.upperAngle)));
+      const lowerDir = upperDir.clone().applyAxisAngle(X_AXIS, rad(180 - front.elbowAngle));
+      const composeFront = (origin: THREE.Vector3) => {
+        const elbow = origin.clone().addScaledVector(upperDir, front.upperLen);
+        const wrist = elbow.clone().addScaledVector(lowerDir, front.lowerLen);
+        return { elbow, wrist };
+      };
+      const frontDy = clamp(FRONT_PLANT_Y[poseId] - composeFront(shoulder).wrist.y, -MAX_CHAIN_SHIFT, MAX_CHAIN_SHIFT);
+      const frontOrigin = shoulder.clone().add(new THREE.Vector3(0, frontDy, 0));
+      const { elbow, wrist } = composeFront(frontOrigin);
+      const frontChain = [
+        { to: elbow, r1: 0.1 * legMul, r2: 0.074 * legMul, flow: [1.32, 1.52] as [number, number], tag: 'upper' },
+        { to: wrist, r1: 0.074 * legMul, r2: 0.058 * legMul, flow: [1.52, 1.74] as [number, number], tag: 'lower' },
+      ];
+      let prevFront = frontOrigin;
+      for (const seg of frontChain) {
+        legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}` });
+        legSegments.push({ x: frontX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `front_${side}_joint` });
+        prevFront = seg.to;
       }
+      frontPaw.push({ x: wrist.x, z: wrist.z });
       // Hindquarter: the femur attaches at almost the complete rear of the
       // body (not counting the tail base), the tibia folds at a near-right
       // angle, and the metatarsus folds back the other way so it runs nearly
@@ -359,61 +383,34 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       const hipRow = rowData[1];
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.52);
       const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.44));
-      const chain = (() => {
-        if (poseId === 'sitting') {
-          // Seated fold; shin and foot lie along the floor under the belly.
-          return [
-            { to: new THREE.Vector3(side * hipX * 1.02, Math.max(0.095, haunchY - 0.17), mz(-0.07)), r1: 0.095 * legMul, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-            { to: new THREE.Vector3(side * hipX * 0.97, 0.045, mz(0.08)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-            { to: new THREE.Vector3(side * hipX * 0.95, 0.034, mz(0.16)), r1: 0.045 * legMul, r2: 0.042 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-            { to: new THREE.Vector3(side * hipX * 0.92, 0.028, mz(0.26)), r1: 0.043 * legMul, r2: 0.047 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
-          ];
-        }
-        if (!pose.legsVisible) {
-          // Loaf / curled: folded under the belly — thigh diagonal to the
-          // stifle, shin kicked back, metatarsus lying flat forward.
-          return [
-            { to: new THREE.Vector3(side * hipX * 0.98, 0.085, mz(-0.06)), r1: 0.115 * legMul * morph.haunchSpread, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-            { to: new THREE.Vector3(side * hipX * 0.92, 0.055, mz(-0.16)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-            { to: new THREE.Vector3(side * hipX * 0.88, 0.045, mz(0.02)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-            { to: new THREE.Vector3(side * hipX * 0.84, 0.03, mz(0.115)), r1: 0.042 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
-          ];
-        }
-        // Standing: long-legged digitigrade stance. Femur from the very
-        // rear of the body down-forward; a MUCH longer tibia folds back
-        // (near right angle); metatarsus folds the other way, parallel to
-        // the femur; toes forward flat. Femur and toe lengths are solved
-        // from the actual hip anchor so the foot plants at y=0.028,
-        // z≈-0.075 at ANY weight; the tibia is substantially lengthened.
-        const fSin = Math.sin(0.505); // ~29° below horizontal — steep femur keeps the stifle back
-        const fCos = Math.cos(0.505);
-        const femurDir = new THREE.Vector3(0, -fSin, fCos);
-        const tibiaDir = new THREE.Vector3(0, -fCos, -fSin); // exact perpendicular, down-back
-        const phalDir = new THREE.Vector3(0, -0.27, 0.963); // toes forward, flat
-        const LT = 0.27; // tibia — substantially lengthened
-        const LP = 0.058; // toe — unchanged
-        // Solve the femur+cannon span from the hip anchor so the foot lands
-        // on the floor (y=0.028) at any weight; femur:cannon = 72:28.
-        const Q = Math.max(0.34, (haunchY - 0.028 - 0.858 * LT - 0.27 * LP) / fSin);
-        const LF = Q * 0.72;
-        const LM = Q * 0.28;
-        const stifle = hip.clone().addScaledVector(femurDir, LF);
-        const hock = stifle.clone().addScaledVector(tibiaDir, LT);
-        const mtp = hock.clone().addScaledVector(femurDir, LM);
-        const toe = mtp.clone().addScaledVector(phalDir, LP);
-        return [
-          { to: stifle, r1: 0.125 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
-          { to: hock, r1: 0.068 * legMul, r2: 0.05 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
-          { to: mtp, r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
-          { to: toe, r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
-        ];
-      })();
-      let prevJoint = hip;
+      const hind = tuning.hind;
+      const femurDir = new THREE.Vector3(0, -Math.sin(rad(hind.femurAngle)), Math.cos(rad(hind.femurAngle)));
+      const tibiaDir = femurDir.clone().applyAxisAngle(X_AXIS, rad(180 - hind.stifleAngle));
+      const metDir = tibiaDir.clone().applyAxisAngle(X_AXIS, -rad(180 - hind.hockAngle));
+      const toeDir = metDir.clone().applyAxisAngle(X_AXIS, toeTurnSign * rad(180 - hind.toeAngle));
+      const composeHind = (origin: THREE.Vector3) => {
+        const stifle = origin.clone().addScaledVector(femurDir, hind.femurLen);
+        const hock = stifle.clone().addScaledVector(tibiaDir, hind.tibiaLen);
+        const mtp = hock.clone().addScaledVector(metDir, hind.metatarsusLen);
+        const toe = mtp.clone().addScaledVector(toeDir, hind.toeLen);
+        return { stifle, hock, mtp, toe };
+      };
+      const hindDy = clamp(HIND_PLANT_Y[poseId] - composeHind(hip).toe.y, -MAX_CHAIN_SHIFT, MAX_CHAIN_SHIFT);
+      const hindOrigin = hip.clone().add(new THREE.Vector3(0, hindDy, 0));
+      const { stifle, hock, mtp, toe } = composeHind(hindOrigin);
+      const chain = [
+        { to: stifle, r1: 0.125 * legMul * morph.haunchSpread, r2: 0.072 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+        { to: hock, r1: 0.068 * legMul, r2: 0.05 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+        { to: mtp, r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+        { to: toe, r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+      ];
+      let prevJoint = hindOrigin;
       for (const seg of chain) {
         legSegments.push({ x: side * hipX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
         legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
         prevJoint = seg.to;
       }
+      hindPaw.push({ x: toe.x, z: toe.z });
       // Haunch muscle ball (the round thigh cats sit on) — every pose.
       bones.push({
         name: `thigh_${side}`,
@@ -453,18 +450,9 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   const pawBalls: Array<{ x: number; z: number }> = [];
   if (pose.legsVisible) {
     for (const side of [-1, 1]) {
-      const x = side * shoulderX;
-      if (pose.frontLegAngle > 0.05) {
-        const angle = pose.frontLegAngle;
-        const shoulder = new THREE.Vector3(x, bellyBottomFront + 0.16, frontZ);
-        const len = (shoulder.y - 0.055) / Math.cos(angle);
-        pawBalls.push({ x, z: frontZ + Math.sin(angle) * len });
-      } else {
-        pawBalls.push({ x, z: frontZ + 0.035 });
-      }
-      if (Number.isFinite(hindToeZ)) {
-        pawBalls.push({ x: side * hipX * 0.79, z: hindToeZ });
-      }
+      const i = side < 0 ? 0 : 1;
+      pawBalls.push({ x: frontPaw[i].x, z: frontPaw[i].z });
+      pawBalls.push({ x: hindPaw[i].x, z: hindPaw[i].z });
     }
   } else {
     // Loaf / curled: just the white tips peeking out from under the chest.

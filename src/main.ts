@@ -15,6 +15,13 @@ import {
   type PoseId,
 } from './animal/profiles';
 import { COATS, type CoatId } from './animal/coats';
+import {
+  HIND_SLIDERS,
+  FRONT_SLIDERS,
+  legTuningDefaults,
+  type TuningSliderSpec,
+  type LegTuning,
+} from './animal/tuning';
 import { BACKDROPS, type BackdropId } from './viewer/backdrop';
 
 const $ = <T extends HTMLElement>(selector: string): T => {
@@ -131,6 +138,7 @@ function setPose(poseId: PoseId): void {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-pressed', String(active));
   }
+  refreshTuningForPose(poseId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,6 +213,85 @@ function setWeightSlider(sliderValue: number): void {
 }
 
 slider.addEventListener('input', () => setWeightSlider(Number(slider.value)));
+
+/* ------------------------------------------------------------------ */
+/* Leg tuning — live sliders for limb length + joint angle             */
+/* ------------------------------------------------------------------ */
+
+const tuningHind = $<HTMLDivElement>('#tuning-hind');
+const tuningFront = $<HTMLDivElement>('#tuning-front');
+const tuningReset = $<HTMLButtonElement>('#tuning-reset');
+const tuningPoseNote = $<HTMLSpanElement>('#tuning-pose-note');
+
+let activePose: PoseId = KITTEN_SPEC.defaultPose as PoseId;
+let tuningState: LegTuning = legTuningDefaults(activePose);
+
+interface TuningRow {
+  input: HTMLInputElement;
+  value: HTMLSpanElement;
+}
+const tuningRows = new Map<string, TuningRow>();
+
+const splitTuningKey = (key: string): ['hind' | 'front', string] => {
+  const [group, field] = key.split('.');
+  return [group as 'hind' | 'front', field];
+};
+
+const getTuningValue = (spec: TuningSliderSpec, source: LegTuning): number => {
+  const [group, field] = splitTuningKey(spec.key);
+  return (source[group] as unknown as Record<string, number>)[field];
+};
+
+const formatTuningValue = (spec: TuningSliderSpec, value: number): string =>
+  spec.unit === 'cm' ? `${(value * 100).toFixed(1)} cm` : `${value.toFixed(1)}°`;
+
+function paintTuningRow(spec: TuningSliderSpec): void {
+  const row = tuningRows.get(spec.key);
+  if (!row) return;
+  const current = getTuningValue(spec, tuningState);
+  row.input.value = String(current);
+  row.input.style.setProperty('--fill', `${((current - spec.min) / (spec.max - spec.min)) * 100}%`);
+  row.value.textContent = formatTuningValue(spec, current);
+}
+
+const ALL_TUNING_SLIDERS = [...HIND_SLIDERS, ...FRONT_SLIDERS];
+
+function buildTuningRow(parent: HTMLElement, spec: TuningSliderSpec): void {
+  const row = document.createElement('label');
+  row.className = 'tuning-row';
+  row.innerHTML = `
+    <span class="tuning-row-head">
+      <span class="tuning-label">${spec.label}</span>
+      <span class="tuning-value"></span>
+    </span>
+    <input type="range" class="tuning-slider" min="${spec.min}" max="${spec.max}" step="${spec.step}" aria-label="${spec.label}" />`;
+  const input = row.querySelector<HTMLInputElement>('.tuning-slider')!;
+  const value = row.querySelector<HTMLSpanElement>('.tuning-value')!;
+  input.addEventListener('input', () => {
+    const next = Number(input.value);
+    const [group, field] = splitTuningKey(spec.key);
+    (tuningState[group] as unknown as Record<string, number>)[field] = next;
+    paintTuningRow(spec);
+    tuningPoseNote.textContent = `${POSE_PARAMS[activePose].label.toLowerCase()} · custom`;
+    viewer.setTuning(JSON.parse(JSON.stringify(tuningState)) as LegTuning);
+  });
+  parent.appendChild(row);
+  tuningRows.set(spec.key, { input, value });
+  paintTuningRow(spec);
+}
+
+for (const spec of HIND_SLIDERS) buildTuningRow(tuningHind, spec);
+for (const spec of FRONT_SLIDERS) buildTuningRow(tuningFront, spec);
+
+function refreshTuningForPose(poseId: PoseId): void {
+  activePose = poseId;
+  tuningState = legTuningDefaults(poseId);
+  for (const spec of ALL_TUNING_SLIDERS) paintTuningRow(spec);
+  tuningPoseNote.textContent = `${POSE_PARAMS[poseId].label.toLowerCase()} · defaults`;
+  viewer.setTuning(null);
+}
+
+tuningReset.addEventListener('click', () => refreshTuningForPose(activePose));
 
 /* ------------------------------------------------------------------ */
 /* Coat picker                                                         */

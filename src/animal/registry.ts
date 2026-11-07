@@ -13,11 +13,14 @@
 import { buildKitten, type KittenBuild } from './kitten';
 import type { CoatId } from './coats';
 import { POSE_ORDER, type PoseId } from './profiles';
+import type { LegTuning } from './tuning';
 
 export interface AnimalBuildOptions {
   weight: number;
   pose: string;
   coat: string;
+  /** Optional leg-tuning overrides (UI sliders). */
+  tuning?: Partial<LegTuning>;
 }
 
 export interface AnimalSpec {
@@ -42,8 +45,8 @@ export const KITTEN_SPEC: AnimalSpec = {
   coats: ['orangeTabby', 'silverTabby', 'cream', 'midnight', 'calico'] as CoatId[],
   defaultPose: 'standing',
   defaultCoat: 'orangeTabby',
-  build: ({ weight, pose, coat }) =>
-    buildKitten({ weight, pose: pose as PoseId, coat: coat as CoatId }),
+  build: ({ weight, pose, coat, tuning }) =>
+    buildKitten({ weight, pose: pose as PoseId, coat: coat as CoatId, tuning }),
 };
 
 export const ANIMALS: readonly AnimalSpec[] = [

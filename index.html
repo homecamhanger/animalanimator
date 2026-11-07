@@ -99,6 +99,26 @@
             <div class="chip-row" id="weight-presets"></div>
           </section>
 
+          <!-- Leg tuning -->
+          <section class="section leg-tuning-section">
+            <details class="tuning" id="leg-tuning">
+              <summary class="section-title tuning-summary">
+                Leg tuning
+                <span class="section-title-note" id="tuning-pose-note">standing · defaults</span>
+              </summary>
+              <div class="tuning-body">
+                <p class="tuning-hint">
+                  Lengths and joint angles for this pose only. The cat stays grounded — extreme values get extreme (in a fun way).
+                </p>
+                <div class="tuning-group-title">Hind legs</div>
+                <div id="tuning-hind"></div>
+                <div class="tuning-group-title">Front legs</div>
+                <div id="tuning-front"></div>
+                <button class="chip tuning-reset" id="tuning-reset" type="button">Reset to pose defaults</button>
+              </div>
+            </details>
+          </section>
+
           <!-- Coat -->
           <section class="section">
             <h2 class="section-title">
