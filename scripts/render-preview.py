@@ -3,7 +3,12 @@
 render-preview.py — rasterise the triangle dump (scripts/dump-mesh.ts) into
 an orthographic preview with painter's algorithm shading. No GPU required.
 
-Usage: python3 scripts/render-preview.py mesh.json out.png --azimuth 25 --elevation 18 [--view right|front]
+Usage: python3 scripts/render-preview.py mesh.json out.png --azimuth 25 --elevation 18
+
+Camera basis is orthonormal (right ⊥ view_dir ⊥ up) with a per-pixel z-buffer,
+so occlusion between overlapping shells (e.g. eyelids over eyeballs) is exact.
+The scene is viewed from -view_dir, so: --azimuth 0 = rear view, 90/270 = side
+profiles (270 faces screen-right), 180 = frontal face.
 """
 
 import argparse
@@ -36,8 +41,8 @@ def main():
     # Camera looks from direction: azimuth rotates around Y (0 → looking from +x side... we choose
     # 0 = pure side view along x axis, i.e. we see the z-y plane), positive azimuth orbits toward front (+z).
     view_dir = (math.cos(el) * math.sin(az), math.sin(el), math.cos(el) * math.cos(az))  # from object toward camera
-    # right vector on screen
-    right = (math.cos(az + math.pi / 2), 0.0, -math.sin(az + math.pi / 2))
+    # screen axes: horizontal = world X rotated to stay orthogonal to view_dir/up
+    right = (math.cos(az), 0.0, -math.sin(az))
     up = (
         -math.sin(el) * math.sin(az),
         math.cos(el),
@@ -128,9 +133,12 @@ def main():
     face_data.sort(key=lambda fd: tri_depth(fd[0]))
 
     image = Image.new('RGB', (size, size), (24, 20, 17))
-    draw = ImageDraw.Draw(image)
+    pixels = image.load()
+    # Per-pixel z-buffer: smaller depth = closer. Far-to-near draw order is
+    # kept, but visibility is decided per pixel — no popping on overlapping
+    # meshes (eyelids vs eyeballs are the osculating-sphere test case).
+    zbuffer = [float('inf')] * (size * size)
 
-    # floor line hint
     for tri, ids, base in face_data:
         a, b, c = tri['a'], tri['b'], tri['c']
         pa, pb, pc = to_screen(a), to_screen(b), to_screen(c)
@@ -142,11 +150,42 @@ def main():
         diffuse = min(1.0, max(0.0, (ndotl + 0.42) / 1.42))
         shade = 0.42 + 0.58 * diffuse
         rgb = tuple(min(255, int(channel * shade)) for channel in base)
-        draw.polygon(
-            [(pa[0], pa[1]), (pb[0], pb[1]), (pc[0], pc[1])],
-            fill=rgb,
-            outline=rgb,
-        )
+
+        ax, ay = pa[0], pa[1]
+        bx, by = pb[0], pb[1]
+        tx, ty = pc[0], pc[1]
+        az_, bz_, cz_ = pa[2], pb[2], pc[2]
+        min_px = max(0, int(min(ax, bx, tx)))
+        max_px = min(size - 1, int(max(ax, bx, tx)))
+        min_py = max(0, int(min(ay, by, ty)))
+        max_py = min(size - 1, int(max(ay, by, ty)))
+        if min_px > max_px or min_py > max_py:
+            continue
+        v0x, v0y = bx - ax, by - ay
+        v1x, v1y = tx - ax, ty - ay
+        denom = v0x * v1y - v1x * v0y
+        if abs(denom) < 1e-9:
+            continue
+        inv = 1.0 / denom
+        for py in range(min_py, max_py + 1):
+            py_c = py + 0.5
+            row = py * size
+            for px in range(min_px, max_px + 1):
+                px_c = px + 0.5
+                v2x, v2y = px_c - ax, py_c - ay
+                w1 = (v2x * v1y - v1x * v2y) * inv
+                w2 = (v0x * v2y - v2x * v0y) * inv
+                w0 = 1.0 - w1 - w2
+                # Double-sided: accept both windings (front and back faces).
+                if w0 < 0.0 or w1 < 0.0 or w2 < 0.0:
+                    if w0 > 0.0 or w1 > 0.0 or w2 > 0.0:
+                        continue
+                    w0, w1, w2 = -w0, -w1, -w2
+                depth = w0 * az_ + w1 * bz_ + w2 * cz_
+                idx = row + px
+                if depth < zbuffer[idx]:
+                    zbuffer[idx] = depth
+                    pixels[px, py] = rgb
 
     image.save(args.out)
     print(f'Wrote {args.out}')

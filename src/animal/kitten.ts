@@ -157,8 +157,15 @@ export function buildKitten(options: KittenOptions): KittenBuild {
   const closedEyes = new THREE.Group();
   closedEyes.name = 'closedEyes';
   const eyeMaterialFor = eyeMaterial(options.coat);
+  // Eyelid — a fur-coloured spherical cap that sweeps over the eye to close
+  // it. Blinking animates rotation.x (open ≈ flipped up over the brow → closed
+  // ≈ swept down across the cornea). The eyeball itself never transforms.
+  const lidOpen = -1.32;          // cap flipped back over the brow — fully hidden
+  const lidClosed = Math.PI / 2;  // cap pole straight out of the face — full cover
+  const lidGeometry = new THREE.SphereGeometry(0.077, 18, 12, 0, Math.PI * 2, 0, 2.05);
+  const lidMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(spec.base), roughness: 0.95 });
   for (const side of [-1, 1]) {
-    const { point, dir } = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, -0.014, true);
+    const { point, dir } = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, -0.016);
     const eyeGroup = new THREE.Group();
     eyeGroup.position.copy(point);
     eyeGroup.quaternion.copy(faceQuat(dir));
@@ -175,14 +182,22 @@ export function buildKitten(options: KittenOptions): KittenBuild {
     const glint = new THREE.Mesh(new THREE.SphereGeometry(0.0125, 8, 8), sharedMats.glint);
     glint.position.set(-0.016, 0.022, 0.044);
     eyeGroup.add(glint);
+
+    const lid = new THREE.Mesh(lidGeometry, lidMaterial);
+    lid.rotation.x = lidOpen;
+    lid.userData.open = lidOpen;
+    lid.userData.closed = lidClosed;
+    eyeGroup.add(lid);
     mark(eye);
+    mark(lid);
+    eyeGroup.userData.lid = lid;
     openEyes.add(eyeGroup);
 
     const arc = new THREE.Mesh(
       new THREE.TorusGeometry(0.051, 0.011, 8, 20, Math.PI),
       sharedMats.closedEye,
     );
-    const arcSnap = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, 0.006, true);
+    const arcSnap = snapFromLocal(side * 0.135, 0.058, 0.02, side * 0.1, 0.06, 1, 0.008);
     arc.position.copy(arcSnap.point);
     arc.quaternion.copy(faceQuat(arcSnap.dir));
     closedEyes.add(arc);

@@ -447,26 +447,31 @@ export class KittenViewer {
       const breath = Math.sin(elapsed * 1.35) * gain;
       internals.skinMesh.scale.set(1 + breath * 0.010, 1 + breath * 0.016, 1 + breath * 0.010);
 
-      // Blinking — each eye squashes about its own frame every few seconds.
-      const setEyeSquash = (value: number) => {
-        for (const eye of internals.openEyes.children) eye.scale.y = value;
+      // Blinking — the eyelid sweeps over the cornea; the eyeball never moves.
+      const setLid = (value: number) => {
+        for (const eye of internals.openEyes.children) {
+          const lid = eye.userData.lid as THREE.Mesh | undefined;
+          if (!lid) continue;
+          const { open, closed } = lid.userData as { open: number; closed: number };
+          lid.rotation.x = open + (closed - open) * value;
+        }
       };
       if (internals.openEyes.visible) {
         if (this.blinkStartedAt < 0 && elapsed >= this.nextBlinkAt) {
           this.blinkStartedAt = elapsed;
         }
         if (this.blinkStartedAt >= 0) {
-          const p = (elapsed - this.blinkStartedAt) / 0.26;
+          const p = (elapsed - this.blinkStartedAt) / 0.24;
           if (p >= 1) {
-            setEyeSquash(1);
+            setLid(0);
             this.blinkStartedAt = -1;
             this.nextBlinkAt = elapsed + 2.3 + Math.random() * 3.1;
           } else {
-            setEyeSquash(1 - Math.sin(p * Math.PI) * 0.9);
+            setLid(Math.sin(p * Math.PI));
           }
         }
       } else {
-        setEyeSquash(1);
+        setLid(0);
         this.blinkStartedAt = -1;
       }
     }

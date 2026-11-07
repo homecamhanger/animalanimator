@@ -225,15 +225,36 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     const base = local(baseLocal.x, baseLocal.y, baseLocal.z);
     const dir = dirLocal.clone().applyQuaternion(headQuat); // direction: ignore translation
     earDirs.push({ base, dir, side });
-    const radii = [0.105, 0.072, 0.04];
-    for (let k = 0; k < 3; k++) {
-      const d = (k / 2) * 0.225 * headMul;
+    // Triangular pinna: a flat plate of overlapping balls, broad at the base
+    // and tapering to the tip, thin along the face-forward axis. The ball
+    // union reads as a wedge — not a string of beads — and the plate plane
+    // always contains the ear axis and the side axis.
+    const dirN = dir.clone().normalize();
+    const faceAxis = new THREE.Vector3(0, 0.15, 1).applyQuaternion(headQuat).normalize();
+    const plateSide = new THREE.Vector3().crossVectors(dirN, faceAxis).normalize();
+    const perkThin = 1 - (1 - earPerk) * 0.18;
+    const earPlate: Array<{ d: number; w: number; r: number }> = [
+      { d: 0.0, w: 0.088, r: 0.055 },
+      { d: 0.0, w: -0.088, r: 0.055 },
+      { d: 0.0, w: 0.0, r: 0.064 },
+      { d: 0.048, w: 0.062, r: 0.051 },
+      { d: 0.048, w: -0.062, r: 0.051 },
+      { d: 0.048, w: 0.0, r: 0.054 },
+      { d: 0.096, w: 0.032, r: 0.046 },
+      { d: 0.096, w: -0.032, r: 0.046 },
+      { d: 0.096, w: 0.0, r: 0.046 },
+      { d: 0.15, w: 0.0, r: 0.038 },
+    ];
+    for (const { d, w, r } of earPlate) {
       bones.push({
-        name: `ear_${side}_${k}`,
-        pos: base.clone().add(dir.clone().multiplyScalar(d)),
-        radius: radii[k] * headMul * (1 - (1 - earPerk) * 0.15),
+        name: `ear_${side}_${d.toFixed(3)}_${w >= 0 ? 'a' : 'b'}${w === 0 ? 'c' : ''}`,
+        pos: base
+          .clone()
+          .addScaledVector(dirN, d * headMul)
+          .addScaledVector(plateSide, w * headMul),
+        radius: r * headMul * perkThin,
         color: 'fur',
-        flow: 1.24 + k * 0.07,
+        flow: 1.24 + d * 2.0,
       });
     }
   }
@@ -245,8 +266,8 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   for (const side of [-1, 1]) {
     bones.push({
       name: `eye_socket_${side}`,
-      pos: local(side * 0.135, 0.06, 0.205),
-      radius: 0.095 * headMul,
+      pos: local(side * 0.135, 0.06, 0.235),
+      radius: 0.088 * headMul,
       color: 'fur',
       flow: 1.05,
       dent: true,
@@ -259,11 +280,11 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
   for (const { base, dir } of earDirs) {
     const along = dir.clone().normalize();
     const pinnaNormal = faceForward.clone().addScaledVector(along, -faceForward.dot(along)).normalize();
-    const mid = base.clone().addScaledVector(along, 0.1125 * headMul);
+    const mid = base.clone().addScaledVector(along, 0.075 * headMul);
     bones.push({
       name: 'ear_scoop',
-      pos: mid.addScaledVector(pinnaNormal, 0.012),
-      radius: 0.082 * headMul,
+      pos: mid.addScaledVector(pinnaNormal, 0.02),
+      radius: 0.075 * headMul,
       color: 'fur',
       flow: 1.3,
       dent: true,
@@ -328,21 +349,41 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
         const ankle = new THREE.Vector3(frontX, 0.065, frontZ + 0.012);
         twoBone(shoulder, ankle, -0.035, 0.1 * legMul, 0.073 * legMul, 0.057 * legMul, [1.32, 1.52], [1.52, 1.74], `front_${side}`);
       }
-      // Hindquarter: thigh ball at the hip, then a thigh + shin two-bone chain.
+      // Hindquarter: thigh ball at the hip, then a FOUR-bone chain —
+      // femur (hip→stifle), tibia (stifle→HOCK, the ankle), metatarsus
+      // (hock→MTP, the metatarsophalangeal joint), phalanges (MTP→toe tip).
       const hipRow = rowData[1];
       const haunchY = clamp(groundY(hipRow.ry) - hipRow.rowRadius + 0.135, 0.155, 0.4);
       const hip = new THREE.Vector3(side * hipX, haunchY + (poseId === 'sitting' ? -0.02 : 0), mz(-0.27));
       if (poseId === 'sitting') {
-        // Classic sitting fold as a real two-bone chain: thigh down-forward,
-        // then the shin lies along the floor with the paw pushed forward.
-        const stifle = new THREE.Vector3(side * hipX * 1.02, Math.max(0.085, hip.y - 0.035), mz(-0.03));
-        const paw = new THREE.Vector3(side * hipX * 0.92, 0.062, mz(0.26));
-        legSegments.push({ x: side * hipX, from: hip, to: stifle, r1: 0.095 * legMul, r2: 0.075 * legMul, flow: [1.32, 1.52], tag: `hind_${side}_thigh` });
-        legSegments.push({ x: side * hipX, from: stifle, to: paw, r1: 0.072 * legMul, r2: 0.06 * legMul, flow: [1.52, 1.74], tag: `hind_${side}_shin` });
-        legSegments.push({ x: side * hipX, from: stifle, to: stifle, r1: 0.073 * legMul, r2: 0.073 * legMul, flow: [1.52, 1.52], tag: `hind_${side}_knee` });
+        // Sitting fold as a four-bone chain, shin and foot lying along the floor.
+        const sitting = [
+          { to: new THREE.Vector3(side * hipX * 1.02, Math.max(0.09, hip.y - 0.03), mz(-0.05)), r1: 0.095 * legMul, r2: 0.068 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+          { to: new THREE.Vector3(side * hipX * 0.97, 0.045, mz(0.1)), r1: 0.062 * legMul, r2: 0.048 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+          { to: new THREE.Vector3(side * hipX * 0.95, 0.034, mz(0.17)), r1: 0.045 * legMul, r2: 0.042 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+          { to: new THREE.Vector3(side * hipX * 0.92, 0.028, mz(0.27)), r1: 0.043 * legMul, r2: 0.047 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+        ];
+        let prevSit = hip;
+        for (const seg of sitting) {
+          legSegments.push({ x: side * hipX, from: prevSit, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
+          legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.08, r2: seg.r2 * 1.08, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
+          prevSit = seg.to;
+        }
       } else {
-        const hock = new THREE.Vector3(side * hipX * 0.78, 0.068, mz(-0.075));
-        twoBone(hip, hock, 0.085, 0.118 * legMul * morph.haunchSpread, 0.078 * legMul, 0.057 * legMul, [1.3, 1.5], [1.5, 1.74], `hind_${side}`);
+        // Standing: stifle kicks forward, hock tucks back, metatarsus and
+        // toes step forward — the paw plants well behind the belly line.
+        const chain = [
+          { to: new THREE.Vector3(side * hipX * 0.97, 0.19, mz(-0.15)), r1: 0.118 * legMul * morph.haunchSpread, r2: 0.07 * legMul, flow: [1.3, 1.46] as [number, number], tag: 'femur' },
+          { to: new THREE.Vector3(side * hipX * 0.86, 0.095, mz(-0.2)), r1: 0.062 * legMul, r2: 0.049 * legMul, flow: [1.46, 1.58] as [number, number], tag: 'tibia' },
+          { to: new THREE.Vector3(side * hipX * 0.8, 0.038, mz(-0.15)), r1: 0.045 * legMul, r2: 0.041 * legMul, flow: [1.58, 1.7] as [number, number], tag: 'metatarsus' },
+          { to: new THREE.Vector3(side * hipX * 0.76, 0.028, mz(-0.095)), r1: 0.04 * legMul, r2: 0.046 * legMul, flow: [1.7, 1.8] as [number, number], tag: 'phalanx' },
+        ];
+        let prevStand = hip;
+        for (const seg of chain) {
+          legSegments.push({ x: side * hipX, from: prevStand, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}` });
+          legSegments.push({ x: side * hipX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
+          prevStand = seg.to;
+        }
       }
       // Haunch muscle ball (the round thigh cats sit on).
       bones.push({
@@ -392,7 +433,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       } else {
         pawBalls.push({ x, z: frontZ + 0.035 });
       }
-      pawBalls.push({ x: side * hipX * 0.78, z: mz(poseId === 'sitting' ? 0.29 : -0.055) });
+      pawBalls.push({ x: side * hipX * (poseId === 'sitting' ? 0.92 : 0.76), z: mz(poseId === 'sitting' ? 0.29 : -0.095) });
     }
   } else {
     // Loaf / curled: just the white tips peeking out from under the chest.
@@ -419,6 +460,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       [0.02, tailBase.y + 0.19, mz(-0.7)],
       [0.085, tailBase.y + 0.32, mz(-0.57)],
       [0.165, tailBase.y + 0.35, mz(-0.37)],
+      [0.235, tailBase.y + 0.345, mz(-0.16)],
     ],
     sitting: [
       [0.07, tailBase.y, tailBase.z],
@@ -426,18 +468,21 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       [0.45, 0.095, mz(-0.02)],
       [0.41, 0.093, mz(0.3)],
       [0.19, 0.092, mz(0.47)],
+      [0.1, 0.091, mz(0.56)],
     ],
     loaf: [
       [0.08, tailBase.y, tailBase.z],
       [0.36, 0.105, mz(-0.2)],
       [0.44, 0.095, mz(0.17)],
       [0.26, 0.092, mz(0.44)],
+      [0.12, 0.091, mz(0.5)],
     ],
     stretch: [
       [0, tailBase.y, tailBase.z],
       [0.02, tailBase.y + 0.2, mz(-0.71)],
       [0.055, tailBase.y + 0.36, mz(-0.7)],
       [0.125, tailBase.y + 0.46, mz(-0.55)],
+      [0.185, tailBase.y + 0.485, mz(-0.36)],
     ],
     curled: [
       [-0.06, tailBase.y, tailBase.z],
@@ -446,6 +491,7 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
       [-0.27, 0.091, mz(0.4)],
       [0.09, 0.091, mz(0.44)],
       [0.29, 0.1, mz(0.3)],
+      [0.34, 0.094, mz(0.1)],
     ],
   };
   const tailCurve = new THREE.CatmullRomCurve3(
@@ -453,15 +499,20 @@ export function solveSkeleton(poseId: PoseId, weight: number): SolvedSkeleton {
     false,
     'centripetal',
   );
-  const tailSamples = 14;
+  // Adaptive sampling: one ball every ~0.038 world units, so the tail never
+  // reads as a string of beads at low weights. Base stays thick to merge
+  // into the rump; the tip tapers but never vanishes.
+  const tailLength = tailCurve.getLength();
+  const tailSamples = Math.max(18, Math.ceil(tailLength / 0.038));
+  const tailThickness = Math.max(tailMul, 0.82);
   for (let i = 0; i <= tailSamples; i++) {
     const t = i / tailSamples;
     const p = tailCurve.getPointAt(t);
-    const radius = (0.066 - 0.028 * Math.pow(t, 0.85)) * tailMul;
+    const radius = (0.074 - 0.03 * Math.pow(t, 0.8)) * tailThickness;
     bones.push({
       name: `tail_${i}`,
       pos: p,
-      radius: Math.max(0.03, radius),
+      radius: Math.max(0.034, radius),
       color: t > 0.82 ? 'saddle' : 'fur',
       flow: 2.15 + t * 0.75,
     });

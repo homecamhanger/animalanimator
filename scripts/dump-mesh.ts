@@ -33,6 +33,22 @@ const [, , poseArg = 'standing', weightArg = '1.0', outArg = '/tmp/kitten-mesh.j
 const weight = Number(weightArg);
 
 const build = buildKitten({ weight, pose: poseArg as never, coat: 'orangeTabby' });
+if (process.argv[5] === 'lids-closed') {
+  const internals = build.group.userData.internals as { openEyes: THREE.Group };
+  for (const eye of internals.openEyes.children) {
+    const lid = eye.userData.lid as THREE.Mesh | undefined;
+    if (lid) lid.rotation.x = Number(process.env.LIDX ?? (lid.userData as { closed: number }).closed);
+  }
+} else if (process.argv[5] === 'lids-half') {
+  const internals = build.group.userData.internals as { openEyes: THREE.Group };
+  for (const eye of internals.openEyes.children) {
+    const lid = eye.userData.lid as THREE.Mesh | undefined;
+    if (lid) {
+      const { open, closed } = lid.userData as { open: number; closed: number };
+      lid.rotation.x = open + (closed - open) * 0.55;
+    }
+  }
+}
 build.group.updateMatrixWorld(true);
 
 const triangles: Array<{ a: number[]; b: number[]; c: number[]; na?: number[]; nb?: number[]; nc?: number[]; color?: string; colors?: string[]; mesh?: string }> = [];
