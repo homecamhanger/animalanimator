@@ -1,13 +1,21 @@
 /**
- * fur.ts — builds the one continuous skin mesh from the skeleton's field balls.
+ * fur.ts — builds the one continuous skin mesh from the skeleton's SDFs.
  *
  * Pipeline:
- *   1. MarchingCubes ingests the balls (reused instance, reset per rebuild).
- *   2. The used vertex range is copied into a compact BufferGeometry.
- *   3. Palette colours are re-normalised per vertex (exact field-weighted mean).
- *   4. Per-vertex tint pass: dark spine saddle, calico blotches, stripe mask
+ *   1. A true signed-distance field is accumulated on a coarse grid — one
+ *      exact SDF per skeleton primitive (sphere / tapered cone), combined with
+ *      a polynomial smooth-min union. Dent primitives subtract via smooth-max.
+ *      Smooth-min never "adds up" the way additive metaballs did, so limbs
+ *      keep slim shafts and blend only inside a small, deliberate radius at
+ *      each joint.
+ *   2. The grid is injected into a reused MarchingCubes instance (values are
+ *      written straight into its field array; the zero crossing is the
+ *      isosurface). No seams — always exactly one shell.
+ *   3. The used vertex range is copied into a compact BufferGeometry.
+ *   4. Palette colours are re-normalised per vertex (nearest-primitive weights).
+ *   5. Per-vertex tint pass: dark spine saddle, calico blotches, stripe mask
  *      (aStripe attribute — belly/socks/muzzle excluded).
- *   5. Fragment shader: wavy mackerel bands + guard-hair speckle, no textures.
+ *   6. Fragment shader: wavy mackerel bands + guard-hair speckle, no textures.
  *
  * One mesh. No seams. The cat is one animal.
  */
@@ -15,7 +23,7 @@
 import * as THREE from 'three';
 import { MarchingCubes } from 'three/examples/jsm/objects/MarchingCubes.js';
 import { mulberry32, seedFromString, type CoatSpec } from './coats';
-import type { FieldBall } from './skeleton';
+import type { FieldPrimitive } from './skeleton';
 
 export const FIELD = {
   /** World→field mapping: world = CENTER + v * RADIUS, v ∈ [-1, 1]. */
@@ -24,8 +32,61 @@ export const FIELD = {
   resolution: 80,
   maxPolyCount: 130_000,
   isolation: 80,
-  subtract: 45,
 };
+
+const FAR = 1e3; // grid sentinel for "no primitive reaches this cell"
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/** Polynomial smooth-min (IQ). Commutative pairwise; order-independent enough. */
+export const sminPoly = (a: number, b: number, k: number): number => {
+  if (k <= 1e-6) return Math.min(a, b);
+  const h = clamp01(0.5 + (0.5 * (b - a)) / k);
+  return b + (a - b) * h - k * h * (1 - h);
+};
+
+/** Polynomial smooth-max (dual of smin). */
+export const smaxPoly = (a: number, b: number, k: number): number => -sminPoly(-a, -b, k);
+
+/** Exact SDF of a (possibly tapered) cone segment a→b with end radii r1→r2.
+ *  Degenerates to a sphere when a == b. Negative inside. */
+function sdPrimitive(px: number, py: number, pz: number, prim: FieldPrimitive): number {
+  const ax = prim.a.x, ay = prim.a.y, az = prim.a.z;
+  const abx = prim.b.x - ax, aby = prim.b.y - ay, abz = prim.b.z - az;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  const mx = (ax + prim.b.x) * 0.5, my = (ay + prim.b.y) * 0.5, mz = (az + prim.b.z) * 0.5;
+  const qx = px - mx, qy = py - my, qz = pz - mz;
+  if (len2 < 1e-10) {
+    return Math.sqrt(qx * qx + qy * qy + qz * qz) - prim.r1;
+  }
+  const invLen = 1 / Math.sqrt(len2);
+  const ux = abx * invLen, uy = aby * invLen, uz = abz * invLen;
+  const h = 0.5 * Math.sqrt(len2);
+  const y = qx * ux + qy * uy + qz * uz;
+  const rx = qx - ux * y, ry = qy - uy * y, rz = qz - uz * y;
+  const rad = Math.sqrt(rx * rx + ry * ry + rz * rz);
+  const r1 = prim.r1, r2 = prim.r2;
+  // Inigo Quilez sdCappedCone — exact cone frustum SDF (flat caps).
+  const k1x = r2, k1y = h;
+  const k2x = r2 - r1, k2y = 2 * h;
+  const cax = rad - Math.min(rad, y < 0 ? r1 : r2);
+  const cay = Math.abs(y) - h;
+  const t = clamp01(((k1x - rad) * k2x + (k1y - y) * k2y) / (k2x * k2x + k2y * k2y));
+  const cbx = rad - k1x + k2x * t;
+  const cby = y - k1y + k2y * t;
+  const s = cbx < 0 && cay < 0 ? -1 : 1;
+  return s * Math.sqrt(Math.min(cax * cax + cay * cay, cbx * cbx + cby * cby));
+}
+
+/** World-space signed distance at a point (negative inside the skin). */
+export function fieldAtPoint(p: THREE.Vector3, primitives: FieldPrimitive[]): number {
+  let acc = FAR;
+  for (const prim of primitives) {
+    const d = sdPrimitive(p.x, p.y, p.z, prim);
+    acc = prim.dent ? smaxPoly(acc, -d, prim.blend) : sminPoly(acc, d, prim.blend);
+  }
+  return acc;
+}
 
 /* ------------------------------------------------------------------ */
 /* Small JS twin of the GLSL value noise (for the blotch/saddle pass)  */
@@ -81,52 +142,66 @@ export interface BuiltSkin {
 }
 
 /**
- * Polygonise the balls into a compact, coloured, smooth-normal skin geometry.
+ * Accumulate the smooth-min union of every primitive onto a world-aligned
+ * grid. Returns the raw SDF grid (negative inside); cells no primitive
+ * touches keep FAR.
  */
-export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin {
+function buildFieldGrid(primitives: FieldPrimitive[]): Float32Array {
+  const res = FIELD.resolution;
+  const half = FIELD.radius;
+  const cellWorld = (2 * half) / res;
+  const invCell = 1 / cellWorld;
+  const C = FIELD.center;
+  const acc = new Float32Array(res * res * res);
+  acc.fill(FAR);
+  for (const prim of primitives) {
+    const maxR = Math.max(prim.r1, prim.r2);
+    const margin = maxR + prim.blend + 2.5 * cellWorld;
+    const minX = Math.min(prim.a.x, prim.b.x) - margin;
+    const maxX = Math.max(prim.a.x, prim.b.x) + margin;
+    const minY = Math.min(prim.a.y, prim.b.y) - margin;
+    const maxY = Math.max(prim.a.y, prim.b.y) + margin;
+    const minZ = Math.min(prim.a.z, prim.b.z) - margin;
+    const maxZ = Math.max(prim.a.z, prim.b.z) + margin;
+    const ix0 = Math.max(0, Math.floor((minX - C.x) * invCell + res / 2));
+    const ix1 = Math.min(res - 1, Math.ceil((maxX - C.x) * invCell + res / 2));
+    const iy0 = Math.max(0, Math.floor((minY - C.y) * invCell + res / 2));
+    const iy1 = Math.min(res - 1, Math.ceil((maxY - C.y) * invCell + res / 2));
+    const iz0 = Math.max(0, Math.floor((minZ - C.z) * invCell + res / 2));
+    const iz1 = Math.min(res - 1, Math.ceil((maxZ - C.z) * invCell + res / 2));
+    for (let iz = iz0; iz <= iz1; iz++) {
+      const pz = (iz - res / 2) * cellWorld + C.z;
+      const zOff = iz * res * res;
+      for (let iy = iy0; iy <= iy1; iy++) {
+        const py = (iy - res / 2) * cellWorld + C.y;
+        const yOff = zOff + iy * res;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const px = (ix - res / 2) * cellWorld + C.x;
+          const i = yOff + ix;
+          const d = sdPrimitive(px, py, pz, prim);
+          acc[i] = prim.dent ? smaxPoly(acc[i], -d, prim.blend) : sminPoly(acc[i], d, prim.blend);
+        }
+      }
+    }
+  }
+  return acc;
+}
+
+/**
+ * Polygonise the primitives into a compact, coloured, smooth-normal skin geometry.
+ */
+export function buildSkinGeometry(primitives: FieldPrimitive[], spec: CoatSpec): BuiltSkin {
   const mc = getMarchingCubes();
   mc.reset();
 
-  const cx = FIELD.center.x, cy = FIELD.center.y, cz = FIELD.center.z, half = FIELD.radius;
-  const fieldOf = (p: THREE.Vector3) => ({
-    x: (p.x - cx) / (2 * half) + 0.5,
-    y: (p.y - cy) / (2 * half) + 0.5,
-    z: (p.z - cz) / (2 * half) + 0.5,
-  });
-
-  const roleColors = new Map<string, THREE.Color>();
-  const roleColor = (role: FieldBall['color']): THREE.Color => {
-    let cached = roleColors.get(role);
-    if (!cached) {
-      const hex =
-        role === 'cream'
-          ? spec.light
-          : role === 'sock'
-            ? '#f3eee2'
-            : role === 'saddle'
-              ? spec.dark
-              : role === 'earFur'
-                ? spec.base
-                : spec.base;
-      cached = new THREE.Color(hex);
-      roleColors.set(role, cached);
-    }
-    return cached;
-  };
-
-  for (const ball of balls) {
-    const f = fieldOf(ball.pos);
-    const rNorm = ball.radius / (2 * half);
-    if (ball.dent) {
-      // Negative strength — carves a dish (the MarchingCubes sign-mirrors the
-      // contribution with the same plasma radius). No colour is injected:
-      // vertex colours are re-normalised from skinBalls below.
-      mc.addBall(f.x, f.y, f.z, -FIELD.subtract * rNorm * rNorm, FIELD.subtract);
-      continue;
-    }
-    // strength = (isolation + subtract) * r²  → ball radius ≈ authored radius
-    const strength = (FIELD.isolation + FIELD.subtract) * rNorm * rNorm;
-    mc.addBall(f.x, f.y, f.z, strength, FIELD.subtract, roleColor(ball.color));
+  // Inject the SDF straight into the MarchingCubes field array. The zero
+  // crossing IS the isosurface — one shell, always. Field scale is arbitrary
+  // (the interpolation ratio is scale-invariant); 60 keeps fp32 margins large.
+  const grid = buildFieldGrid(primitives);
+  const field = mc.field as Float32Array;
+  const SCALE = 60;
+  for (let i = 0; i < grid.length; i++) {
+    field[i] = FIELD.isolation - grid[i] * SCALE;
   }
   mc.update();
 
@@ -138,8 +213,9 @@ export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin
   positions.set(mc.positionArray.subarray(0, count * 3));
   normals.set(mc.normalArray.subarray(0, count * 3));
   colors.set(mc.colorArray.subarray(0, count * 3));
-  // MC works in a [-radius, radius] cube; we authored the balls in world units,
+  // MC works in a [-radius, radius] cube; we authored the primitives in world units,
   // so scale back up and re-centralise on the field centre.
+  const cx = FIELD.center.x, cy = FIELD.center.y, cz = FIELD.center.z, half = FIELD.radius;
   for (let i = 0; i < count * 3; i += 3) {
     positions[i] = positions[i] * half + cx;
     positions[i + 1] = positions[i + 1] * half + cy;
@@ -157,7 +233,7 @@ export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin
     normalAttr.setXYZ(i, n.x, n.y, n.z);
   }
 
-  normalizePaletteColors(geometry, balls, spec);
+  normalizePaletteColors(geometry, primitives, spec);
   paintFacets(geometry, spec);
 
   geometry.computeBoundingSphere();
@@ -165,55 +241,66 @@ export function buildSkinGeometry(balls: FieldBall[], spec: CoatSpec): BuiltSkin
   return { geometry, triangles: count / 3 };
 }
 
-/** Exact per-vertex re-normalisation of the accumulated palette weights. */
-function normalizePaletteColors(geometry: THREE.BufferGeometry, balls: FieldBall[], spec: CoatSpec): void {
+/**
+ * Per-vertex palette: each vertex is tinted by the primitives nearest to it,
+ * with a sharp inverse-distance falloff, so socks/cream boundaries stay crisp
+ * while colours blend smoothly across joints. `aFlow` comes out as the
+ * weight-matched mean of the endpoint flows (interpolated along each cone).
+ */
+function normalizePaletteColors(geometry: THREE.BufferGeometry, primitives: FieldPrimitive[], spec: CoatSpec): void {
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
   const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
-  const half = FIELD.radius;
-  const fieldBalls = balls.filter((ball) => !ball.dent).map((ball) => ({
-    fx: (ball.pos.x - FIELD.center.x) / (2 * half) + 0.5,
-    fy: (ball.pos.y - FIELD.center.y) / (2 * half) + 0.5,
-    fz: (ball.pos.z - FIELD.center.z) / (2 * half) + 0.5,
-    cut: Math.sqrt(((FIELD.isolation + FIELD.subtract) * ball.radius * ball.radius) / FIELD.subtract) / (2 * half),
-    color: roleColorFor(ball.color, spec),
-    flow: ball.flow,
-    // Sock atoms are intentionally small (they never reshape the silhouette),
-    // so they get a role weight to keep the white decisive in the average.
-    weight: ball.color === 'sock' ? 1.9 : 1,
-  }));
 
-  // Precompute per-ball cut radii in field units.
-  const v = new THREE.Vector3();
-  const sum = { r: 0, g: 0, b: 0, w: 0, flow: 0 };
+  const prims = primitives
+    .filter((prim) => !prim.dent)
+    .map((prim) => {
+      const maxR = Math.max(prim.r1, prim.r2);
+      const minX = Math.min(prim.a.x, prim.b.x) - maxR - 0.06;
+      const maxX = Math.max(prim.a.x, prim.b.x) + maxR + 0.06;
+      const minY = Math.min(prim.a.y, prim.b.y) - maxR - 0.06;
+      const maxY = Math.max(prim.a.y, prim.b.y) + maxR + 0.06;
+      const minZ = Math.min(prim.a.z, prim.b.z) - maxR - 0.06;
+      const maxZ = Math.max(prim.a.z, prim.b.z) + maxR + 0.06;
+      const abx = prim.b.x - prim.a.x, aby = prim.b.y - prim.a.y, abz = prim.b.z - prim.a.z;
+      const len2 = abx * abx + aby * aby + abz * abz;
+      return {
+        prim,
+        color: roleColorFor(prim.color, spec),
+        weight: prim.color === 'sock' ? 1.9 : 1,
+        minX, maxX, minY, maxY, minZ, maxZ,
+        abx, aby, abz, len2,
+      };
+    });
+
   const flowAttr = new Float32Array(posAttr.count);
   for (let i = 0; i < posAttr.count; i++) {
-    v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
-    const fx = (v.x - FIELD.center.x) / (2 * half) + 0.5;
-    const fy = (v.y - FIELD.center.y) / (2 * half) + 0.5;
-    const fz = (v.z - FIELD.center.z) / (2 * half) + 0.5;
-    sum.r = 0; sum.g = 0; sum.b = 0; sum.w = 0; sum.flow = 0;
-    for (const ball of fieldBalls) {
-      const dx = fx - ball.fx, dy = fy - ball.fy, dz = fz - ball.fz;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist >= ball.cut) continue;
-      const ratio = dist / ball.cut;
-      const contrib = (1 - ratio * ratio * ratio * (ratio * (ratio * 6 - 15) + 10)) * ball.weight;
-      sum.r += ball.color.r * contrib;
-      sum.g += ball.color.g * contrib;
-      sum.b += ball.color.b * contrib;
-      sum.w += contrib;
-      sum.flow += ball.flow * contrib;
+    const vx = posAttr.getX(i), vy = posAttr.getY(i), vz = posAttr.getZ(i);
+    let sumR = 0, sumG = 0, sumB = 0, sumW = 0, sumFlow = 0;
+    for (const entry of prims) {
+      if (vx < entry.minX || vx > entry.maxX || vy < entry.minY || vy > entry.maxY || vz < entry.minZ || vz > entry.maxZ) continue;
+      const d = Math.max(sdPrimitive(vx, vy, vz, entry.prim), 0);
+      const w = entry.weight / Math.pow(d + 0.03, 4);
+      let t = 0;
+      if (entry.len2 > 1e-10) {
+        t = clamp01(((vx - entry.prim.a.x) * entry.abx + (vy - entry.prim.a.y) * entry.aby + (vz - entry.prim.a.z) * entry.abz) / entry.len2);
+      }
+      const flow = entry.prim.flowA + (entry.prim.flowB - entry.prim.flowA) * t;
+      sumR += entry.color.r * w;
+      sumG += entry.color.g * w;
+      sumB += entry.color.b * w;
+      sumFlow += flow * w;
+      sumW += w;
     }
-    if (sum.w > 1e-5) {
-      colorAttr.setXYZ(i, sum.r / sum.w, sum.g / sum.w, sum.b / sum.w);
-      flowAttr[i] = sum.flow / sum.w;
+    if (sumW > 1e-6) {
+      colorAttr.setXYZ(i, sumR / sumW, sumG / sumW, sumB / sumW);
+      flowAttr[i] = sumFlow / sumW;
     }
   }
   colorAttr.needsUpdate = true;
   geometry.setAttribute('aFlow', new THREE.BufferAttribute(flowAttr, 1));
 }
 
-function roleColorFor(role: FieldBall['color'], spec: CoatSpec): THREE.Color {
+function roleColorFor(role: FieldPrimitive['color'], spec: CoatSpec): THREE.Color {
   const hex =
     role === 'cream'
       ? spec.light
@@ -294,66 +381,32 @@ function smoothstepColor(a: THREE.Color, b: THREE.Color, radius: number): number
 /* Field query — used to lock non-fur features onto the isosurface     */
 /* ------------------------------------------------------------------ */
 
-/** Exact field value at a world point (same math as the Marching Cubes). */
-export function fieldAtPoint(p: THREE.Vector3, balls: FieldBall[]): number {
-  const half = FIELD.radius;
-  const res = FIELD.resolution;
-  const axis = (v: number, i: number) =>
-    ((v - FIELD.center.getComponent(i)) / (2 * half) + 0.5) * res;
-  const sub = FIELD.subtract;
-  let sum = 0;
-  for (const ball of balls) {
-    const rField = ball.radius / (2 * half);
-    const rCells = rField * res;
-    if (ball.dent) {
-      // MC adds: sub - |s|/d² inside the plasma sphere, 0 outside.
-      const cutoff = rCells;
-      const strength = sub * rCells * rCells;
-      const dx = axis(p.x, 0) - axis(ball.pos.x, 0);
-      const dy = axis(p.y, 1) - axis(ball.pos.y, 1);
-      const dz = axis(p.z, 2) - axis(ball.pos.z, 2);
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 > cutoff * cutoff) continue;
-      sum += sub - strength / (1e-6 + d2);
-      continue;
-    }
-    const strength = (FIELD.isolation + sub) * rField * rField * res * res;
-    const cutoff = Math.sqrt(strength / sub);
-    const dx = axis(p.x, 0) - axis(ball.pos.x, 0);
-    const dy = axis(p.y, 1) - axis(ball.pos.y, 1);
-    const dz = axis(p.z, 2) - axis(ball.pos.z, 2);
-    const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 > cutoff * cutoff) continue;
-    sum += strength / (1e-6 + d2) - sub;
-  }
-  return sum;
-}
-
 /**
- * Distance from `origin` along `dir` until the field drops through the
+ * March from `origin` along `dir` until the skin field rises through the
  * isosurface (binary-refined). Lets accessories sit exactly on the skin
- * instead of on top of bone guesses. Falls back to maxDist if the ray
- * never leaves the solid (should not happen for face features).
+ * instead of on top of primitive guesses. Falls back to maxDist if the ray
+ * never leaves the solid.
  */
 export function surfaceDistance(
-  balls: FieldBall[],
+  primitives: FieldPrimitive[],
   origin: THREE.Vector3,
   dir: THREE.Vector3,
   maxDist = 0.9,
 ): number {
   let prevT = 0;
-  let prev = fieldAtPoint(origin, balls);
-  // Origins on/near the surface can start outside the solid — walk backwards
-  // until inside so the march below always sees prev >= isolation.
-  if (prev < FIELD.isolation) {
+  let prev = fieldAtPoint(origin, primitives);
+  // Origins on/near the surface can start inside the solid — the march below
+  // always needs prev < 0, so if the origin is already OUTSIDE, walk backwards
+  // until it is inside.
+  if (prev >= 0) {
     const pre = new THREE.Vector3();
     let back = 0;
     for (; back <= 0.45; back += 0.012) {
       pre.copy(origin).addScaledVector(dir, -back);
-      const f = fieldAtPoint(pre, balls);
-      if (f >= FIELD.isolation) {
+      const f = fieldAtPoint(pre, primitives);
+      if (f < 0) {
         // Re-anchor: distance returned is measured from the ORIGINAL origin,
-        // so subtract the negative offset walked back.
+        // so add the offset walked back.
         origin = pre.clone();
         maxDist += back;
         prevT = 0;
@@ -369,17 +422,17 @@ export function surfaceDistance(
     const px = origin.x + dir.x * t;
     const py = origin.y + dir.y * t;
     const pz = origin.z + dir.z * t;
-    const f = fieldAtPoint(new THREE.Vector3(px, py, pz), balls);
-    if (prev >= FIELD.isolation && f < FIELD.isolation) {
+    const f = fieldAtPoint(new THREE.Vector3(px, py, pz), primitives);
+    if (prev < 0 && f >= 0) {
       let lo = prevT;
       let hi = t;
       for (let j = 0; j < 14; j++) {
         const mid = (lo + hi) / 2;
         const fm = fieldAtPoint(
           new THREE.Vector3(origin.x + dir.x * mid, origin.y + dir.y * mid, origin.z + dir.z * mid),
-          balls,
+          primitives,
         );
-        if (fm >= FIELD.isolation) lo = mid;
+        if (fm < 0) lo = mid;
         else hi = mid;
       }
       return (lo + hi) / 2;

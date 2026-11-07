@@ -29,15 +29,31 @@ export type BallColor =
   | 'saddle'   // darker spine saddle + tail tip
   | 'earFur';  // solid base for ears (as they are thin)
 
-export interface FieldBall {
+/**
+ * FieldPrimitive — an exact signed-distance primitive polygonised by a
+ * smooth-min union (see fur.ts). A sphere is a segment of zero length with
+ * equal radii; a capsule has equal radii; a cone tapers. The signed distance
+ * never "adds up" the way additive metaballs did, so limbs keep their slim
+ * shafts and only blend inside a small, deliberate radius at each joint.
+ */
+export interface FieldPrimitive {
   name: string;
+  /** Centroid — sphere: the centre; segment: the midpoint. */
   pos: THREE.Vector3;
-  radius: number;
+  /** Segment endpoints (spheres: both equal `pos`). */
+  a: THREE.Vector3;
+  b: THREE.Vector3;
+  /** Radius at `a` / at `b`. */
+  r1: number;
+  r2: number;
+  /** Smooth-min blend radius into the union (world units). Dents: smax smoothing. */
+  blend: number;
   color: BallColor;
   /** Arc-length-ish coordinate along the animal (0 = rump → ~1 = face, >1 limbs/tail).
-   *  The stripe shader bands on this instead of world axes. */
-  flow: number;
-  /** True for negative-strength balls that CARVE the field (eye sockets, pinna scoops). */
+   *  Interpolated along the segment; the stripe shader bands on it. */
+  flowA: number;
+  flowB: number;
+  /** True for negative-strength primitives that CARVE the field (eye sockets, pinna scoops). */
   dent?: boolean;
 }
 
@@ -52,7 +68,7 @@ export interface SkeletonAnchors {
 }
 
 export interface SolvedSkeleton {
-  balls: FieldBall[];
+  balls: FieldPrimitive[];
   anchors: SkeletonAnchors;
   eyesOpen: boolean;
   earPerk: number;
@@ -101,8 +117,33 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const pose = POSE_PARAMS[poseId];
   const c = morph.chonk;
   const zScale = pose.scaleZ;
-  const bones: FieldBall[] = [];
+  const bones: FieldPrimitive[] = [];
   const mz = (z: number) => z * zScale;
+
+  /* Primitive emission helpers */
+  const addSphere = (
+    name: string, x: number, y: number, z: number, r: number,
+    color: BallColor, flow: number, blend = 0.055,
+  ): void => {
+    const p = new THREE.Vector3(x, y, z);
+    bones.push({ name, pos: p.clone(), a: p.clone(), b: p.clone(), r1: r, r2: r, blend, color, flowA: flow, flowB: flow });
+  };
+  const addSeg = (
+    name: string, a: THREE.Vector3, b: THREE.Vector3, r1: number, r2: number,
+    color: BallColor, flowA: number, flowB: number, blend: number,
+  ): void => {
+    bones.push({
+      name,
+      pos: a.clone().add(b).multiplyScalar(0.5),
+      a: a.clone(),
+      b: b.clone(),
+      r1, r2, blend, color, flowA, flowB,
+    });
+  };
+  const addDent = (name: string, x: number, y: number, z: number, r: number, blend = 0.02, flow = 1.0): void => {
+    const p = new THREE.Vector3(x, y, z);
+    bones.push({ name, pos: p.clone(), a: p.clone(), b: p.clone(), r1: r, r2: r, blend, color: 'fur', flowA: flow, flowB: flow, dent: true });
+  };
 
   const widthMul = morph.widthMul;
   const radiusMul = 0.8 + 0.2 * widthMul; // fat widens mostly sideways
@@ -138,33 +179,27 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   for (const { row, z, ry, rowRadius, offset } of rowData) {
     const y = groundY(ry);
     if (row.offsetFrac === 0) {
-      bones.push({ name: 'spine_rump', pos: new THREE.Vector3(0, y, z), radius: rowRadius, color: 'fur', flow: 0 });
+      addSphere('spine_rump', 0, y, z, rowRadius, 'fur', 0, 0.08);
       continue;
     }
-    bones.push({ name: `spine_${row.t.toFixed(2)}_l`, pos: new THREE.Vector3(-offset, y, z), radius: rowRadius, color: 'fur', flow: row.t });
-    bones.push({ name: `spine_${row.t.toFixed(2)}_r`, pos: new THREE.Vector3(offset, y, z), radius: rowRadius, color: 'fur', flow: row.t });
-    // Centre bridge ball — kills the double-sphere crease along the spine.
-    bones.push({ name: `spine_${row.t.toFixed(2)}_c`, pos: new THREE.Vector3(0, y, z), radius: rowRadius * 0.82, color: 'fur', flow: row.t });
+    addSphere(`spine_${row.t.toFixed(2)}_l`, -offset, y, z, rowRadius, 'fur', row.t, 0.08);
+    addSphere(`spine_${row.t.toFixed(2)}_r`, offset, y, z, rowRadius, 'fur', row.t, 0.08);
+    // Centre bridge sphere — kills the double-bump crease along the spine.
+    addSphere(`spine_${row.t.toFixed(2)}_c`, 0, y, z, rowRadius * 0.82, 'fur', row.t, 0.08);
   }
   // Sagging belly core (the chonk engine) + cream belly lighten.
-  bones.push({ name: 'belly_sag', pos: new THREE.Vector3(0, groundY(sagBallY), midRow.z), radius: sagBallRadius, color: 'fur', flow: 0.47 });
-  bones.push({ name: 'belly_cream', pos: new THREE.Vector3(0, groundY(sagBallY - 0.02), midRow.z + 0.04), radius: sagBallRadius * 0.9, color: 'cream', flow: 0.47 });
+  addSphere('belly_sag', 0, groundY(sagBallY), midRow.z, sagBallRadius, 'fur', 0.47, 0.08);
+  addSphere('belly_cream', 0, groundY(sagBallY - 0.02), midRow.z + 0.04, sagBallRadius * 0.9, 'cream', 0.47, 0.06);
 
   // Chest blaze — a soft cream ball nestled between the forelegs.
   const chest = rowData[4];
-  bones.push({
-    name: 'chest_blaze',
-    pos: new THREE.Vector3(0, groundY(chest.ry + 0.02), chest.z),
-    radius: 0.135 * radiusMul * pose.scaleY,
-    color: 'cream',
-    flow: 0.66,
-  });
+  addSphere('chest_blaze', 0, groundY(chest.ry + 0.02), chest.z, 0.135 * radiusMul * pose.scaleY, 'cream', 0.66, 0.07);
 
   /* ------------------------------ Neck & head ------------------------ */
 
   const neckY = groundY(BASE_SPINE + spineOffset(1) + 0.075);
   const neckZ = mz(0.565);
-  bones.push({ name: 'neck_low', pos: new THREE.Vector3(0, neckY, neckZ), radius: 0.095 * (1 + morph.chonk * 0.38) * pose.scaleY, color: 'fur', flow: 0.97 });
+  addSphere('neck_low', 0, neckY, neckZ, 0.095 * (1 + morph.chonk * 0.38) * pose.scaleY, 'fur', 0.97, 0.06);
 
   const headZ = mz(0.565 + 0.075 + pose.headForward);
   const headBaseY = groundY(BASE_SPINE + spineOffset(1) + 0.27 - pose.headDrop * 0.55);
@@ -179,41 +214,21 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   const local = (x: number, y: number, z: number): THREE.Vector3 =>
     new THREE.Vector3(x * headMul, y * headMul, z * headMul).applyQuaternion(headQuat).add(headCenter);
 
-  bones.push({ name: 'head_cranium', pos: headCenter.clone(), radius: 0.228 * headMul, color: 'fur', flow: 1.03 });
-  bones.push({
-    name: 'head_skull',
-    pos: local(0, 0.055, -0.085),
-    radius: 0.184 * headMul,
-    color: 'fur',
-    flow: 1.06,
-  });
+  addSphere('head_cranium', headCenter.x, headCenter.y, headCenter.z, 0.228 * headMul, 'fur', 1.03, 0.06);
+  const skullPos = local(0, 0.055, -0.085);
+  addSphere('head_skull', skullPos.x, skullPos.y, skullPos.z, 0.184 * headMul, 'fur', 1.06, 0.055);
   // Cheek ruffs — chonk shows up in the face first.
   for (const side of [-1, 1] as const) {
-    bones.push({
-      name: `cheek_${side}`,
-      pos: local(side * 0.124, -0.048, 0.075),
-      radius: 0.122 * morph.cheekMul * headMul,
-      color: 'fur',
-      flow: 1.13,
-    });
+    const p = local(side * 0.124, -0.048, 0.075);
+    addSphere(`cheek_${side}`, p.x, p.y, p.z, 0.122 * morph.cheekMul * headMul, 'fur', 1.13, 0.05);
   }
   // Muzzle + chin (cream). The double chin is earning its keep.
-  bones.push({
-    name: 'muzzle',
-    pos: local(0, -0.118, 0.208),
-    radius: 0.118 * headMul,
-    color: 'cream',
-    flow: 1.17,
-  });
+  const muzzlePos = local(0, -0.118, 0.208);
+  addSphere('muzzle', muzzlePos.x, muzzlePos.y, muzzlePos.z, 0.118 * headMul, 'cream', 1.17, 0.05);
   const chinRadius = 0.082 * morph.chinMul;
   if (chinRadius > 0.028) {
-    bones.push({
-      name: 'chin',
-      pos: local(0, -0.185, 0.125),
-      radius: chinRadius,
-      color: 'cream',
-      flow: 1.19,
-    });
+    const p = local(0, -0.185, 0.125);
+    addSphere('chin', p.x, p.y, p.z, chinRadius, 'cream', 1.19, 0.04);
   }
 
   /* ------------------------------ Ears -------------------------------- */
@@ -249,16 +264,11 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       { d: 0.15, w: 0.0, r: 0.038 },
     ];
     for (const { d, w, r } of earPlate) {
-      bones.push({
-        name: `ear_${side}_${d.toFixed(3)}_${w >= 0 ? 'a' : 'b'}${w === 0 ? 'c' : ''}`,
-        pos: base
-          .clone()
-          .addScaledVector(dirN, d * headMul)
-          .addScaledVector(plateSide, w * headMul),
-        radius: r * headMul * perkThin,
-        color: 'fur',
-        flow: 1.24 + d * 2.0,
-      });
+      const p = base
+        .clone()
+        .addScaledVector(dirN, d * headMul)
+        .addScaledVector(plateSide, w * headMul);
+      addSphere(`ear_${side}_${d.toFixed(3)}_${w >= 0 ? 'a' : 'b'}${w === 0 ? 'c' : ''}`, p.x, p.y, p.z, r * headMul * perkThin, 'fur', 1.24 + d * 2.0, 0.045);
     }
   }
 
@@ -267,14 +277,8 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
   // MC field dips into a dish around each eye. The eyes themselves are placed
   // against the socketless surface, so they nestle into the dishes.
   for (const side of [-1, 1]) {
-    bones.push({
-      name: `eye_socket_${side}`,
-      pos: local(side * 0.135, 0.06, 0.235),
-      radius: 0.08 * headMul,
-      color: 'fur',
-      flow: 1.05,
-      dent: true,
-    });
+    const p = local(side * 0.135, 0.06, 0.235);
+    addDent(`eye_socket_${side}`, p.x, p.y, p.z, 0.07 * headMul, 0.014, 1.05);
   }
   // Pinna scoops: one anti-ball per ear, on the ear's front face (face-forward
   // normal with the ear-axis component removed), so each ear grows a concave
@@ -284,14 +288,8 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     const along = dir.clone().normalize();
     const pinnaNormal = faceForward.clone().addScaledVector(along, -faceForward.dot(along)).normalize();
     const mid = base.clone().addScaledVector(along, 0.075 * headMul);
-    bones.push({
-      name: 'ear_scoop',
-      pos: mid.addScaledVector(pinnaNormal, 0.02),
-      radius: 0.075 * headMul,
-      color: 'fur',
-      flow: 1.3,
-      dent: true,
-    });
+    mid.addScaledVector(pinnaNormal, 0.02);
+    addDent('ear_scoop', mid.x, mid.y, mid.z, 0.052 * headMul, 0.014, 1.3);
   }
 
   /* ------------------------------ Legs -------------------------------- */
@@ -379,7 +377,6 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       let prevFront = frontOrigin;
       for (const seg of frontChain) {
         legSegments.push({ x: frontX, from: prevFront, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `front_${side}_${seg.tag}`, color: seg.color });
-        legSegments.push({ x: frontX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `front_${side}_joint` });
         prevFront = seg.to;
       }
       // Hindquarter: the femur attaches at almost the complete rear of the
@@ -417,69 +414,40 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
       let prevJoint = hindOrigin;
       for (const seg of chain) {
         legSegments.push({ x: side * hipJointX, from: prevJoint, to: seg.to, r1: seg.r1, r2: seg.r2, flow: seg.flow, tag: `hind_${side}_${seg.tag}`, color: seg.color });
-        legSegments.push({ x: side * hipJointX, from: seg.to, to: seg.to, r1: seg.r2 * 1.1, r2: seg.r2 * 1.1, flow: [seg.flow[1], seg.flow[1]], tag: `hind_${side}_joint` });
         prevJoint = seg.to;
       }
       // Haunch muscle ball (the round thigh cats sit on) — every pose.
-      bones.push({
-        name: `thigh_${side}`,
-        pos: haunchMass.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02)),
-        radius: 0.112 * legMul * morph.haunchSpread * pose.scaleY,
-        color: 'fur',
-        flow: 1.28,
-      });
+      const thighPos = haunchMass.clone().add(new THREE.Vector3(side * 0.01, 0.035, -0.02));
+      addSphere(`thigh_${side}`, thighPos.x, thighPos.y, thighPos.z, 0.112 * legMul * morph.haunchSpread * pose.scaleY, 'fur', 1.28, 0.065);
     }
   }
 
+  // One exact cone primitive per bone — the smooth-min union fillets the
+  // joints, so chains stay slim shafts instead of fusing into a blob.
+  const LEG_BLEND: Record<string, number> = {
+    upper: 0.062, lowerA: 0.04, lowerB: 0.034,
+    femur: 0.065, tibia: 0.042, metatarsus: 0.034, metatarsusB: 0.034, phalanx: 0.032,
+  };
   for (const seg of legSegments) {
     const dir = seg.to.clone().sub(seg.from);
     const length = dir.length();
-    if (length < 1e-4) {
-      // Knee cap ball — a single sphere, no chain needed.
-      bones.push({ name: seg.tag, pos: seg.from.clone(), radius: seg.r1, color: 'fur', flow: seg.flow[0] });
-      continue;
-    }
-    const meanR = (seg.r1 + seg.r2) / 2;
-    const steps = Math.max(2, Math.ceil(length / (meanR * 0.82)));
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const radius = seg.r1 + (seg.r2 - seg.r1) * t;
-      bones.push({
-        name: `leg_${seg.tag}_${i}`,
-        pos: seg.from.clone().lerp(seg.to, t),
-        radius,
-        color: seg.color ?? 'fur',
-        flow: seg.flow[0] + (seg.flow[1] - seg.flow[0]) * t,
-      });
-    }
+    if (length < 1e-4) continue; // zero-length joints are folded into the cones
+    const blend = LEG_BLEND[seg.tag.split('_').slice(2).join('_')] ?? 0.04;
+    addSeg(
+      `leg_${seg.tag}`,
+      seg.from,
+      seg.to,
+      seg.r1,
+      seg.r2,
+      seg.color ?? 'fur',
+      seg.flow[0],
+      seg.flow[1],
+      blend,
+    );
+    // Knee/hock fillet — a small sphere at each joint so the bend reads as a
+    // joint and never as a crease.
+    addSphere(`leg_${seg.tag}_cap`, seg.to.x, seg.to.y, seg.to.z, seg.r2 * 1.08, seg.color ?? 'fur', seg.flow[1], 0.036);
   }
-
-  /* -------------------- Crotch creases ---------------------------
-   * One continuous skin everywhere — but the limbs must not read as one
-   * balloon. Negative-strength anti-balls on the midline under the belly
-   * and under the chest carve a fur crease between the inner thighs and
-   * between the forearms. The isosurface recedes into a valley there;
-   * the shell is never broken, no seam is ever created. */
-  const addCrease = (z: number, y: number, r: number): void => {
-    bones.push({
-      name: 'crease',
-      pos: new THREE.Vector3(0, y, z),
-      radius: r,
-      color: 'fur',
-      flow: 1.0,
-      dent: true,
-    });
-  };
-  // Overlapping grid → one smooth valley, not a row of beads.
-  const creaseWall = (zMin: number, zMax: number, yMin: number, yMax: number, step: number, r: number): void => {
-    for (let z = zMin; z <= zMax + 1e-4; z += step) {
-      for (let y = yMin; y <= yMax + 1e-4; y += step) {
-        addCrease(z, y, r);
-      }
-    }
-  };
-  creaseWall(mz(-0.4), mz(0.08), 0.045, 0.2, 0.055, 0.062);
-  creaseWall(mz(0.26), mz(0.44), 0.045, 0.2, 0.055, 0.058);
 
   /* ------------------------------ Tail --------------------------------- */
 
@@ -531,24 +499,34 @@ export function solveSkeleton(poseId: PoseId, weight: number, tuningOverride?: P
     false,
     'centripetal',
   );
-  // Adaptive sampling: one ball every ~0.038 world units, so the tail never
-  // reads as a string of beads at low weights. Base stays thick to merge
+  // One tapered cone per span between sparse curve samples — the smooth-min
+  // union fillets the joints into a smooth tail. Base stays thick to merge
   // into the rump; the tip tapers but never vanishes.
   const tailLength = tailCurve.getLength();
-  const tailSamples = Math.max(18, Math.ceil(tailLength / 0.038));
+  const tailSpans = Math.max(7, Math.ceil(tailLength / 0.055));
   const tailThickness = Math.max(tailMul, 0.82);
-  for (let i = 0; i <= tailSamples; i++) {
-    const t = i / tailSamples;
-    const p = tailCurve.getPointAt(t);
-    const radius = (0.074 - 0.03 * Math.pow(t, 0.8)) * tailThickness;
-    bones.push({
-      name: `tail_${i}`,
-      pos: p,
-      radius: Math.max(0.034, radius),
-      color: t > 0.82 ? 'saddle' : 'fur',
-      flow: 2.15 + t * 0.75,
-    });
+  const tailRadius = (t: number) => Math.max(0.034, (0.074 - 0.03 * Math.pow(t, 0.8)) * tailThickness);
+  for (let i = 0; i < tailSpans; i++) {
+    const t0 = i / tailSpans;
+    const t1 = (i + 1) / tailSpans;
+    const p0 = tailCurve.getPointAt(t0);
+    const p1 = tailCurve.getPointAt(t1);
+    const midT = (t0 + t1) / 2;
+    const color = midT > 0.82 ? 'saddle' : 'fur';
+    addSeg(
+      `tail_${i}`,
+      p0,
+      p1,
+      tailRadius(t0),
+      tailRadius(t1),
+      color,
+      2.15 + t0 * 0.75,
+      2.15 + t1 * 0.75,
+      0.075,
+    );
   }
+  const tailTip = tailCurve.getPointAt(1);
+  addSphere('tail_tip', tailTip.x, tailTip.y, tailTip.z, tailRadius(1) * 0.96, 'saddle', 2.9, 0.04);
 
   /* ------------------------------ Anchors ------------------------------ */
 
